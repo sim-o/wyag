@@ -1,9 +1,33 @@
-use std::{fmt::Display, str::from_utf8};
+use std::{fmt::Debug, fmt::Display, str::from_utf8};
 
-pub trait GitObject: Display {
-    fn init(&self);
-    fn serialize(&self) -> &[u8];
-    fn deserialize(&self) -> Box<dyn GitObject>;
+pub enum GitObject {
+    Blob(BlobObject),
+}
+
+impl Display for GitObject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            GitObject::Blob(blob) => f.write_fmt(format_args!(
+                "blob {}",
+                from_utf8(&blob.data).unwrap_or("<<BINARY>>")
+            )),
+        }
+    }
+}
+
+impl GitObject {
+    pub fn name(&self) -> &'static [u8] {
+        match &self {
+            GitObject::Blob(_) => b"blob",
+        }
+    }
+
+    pub fn serialize(&self) -> &Vec<u8> {
+        use GitObject::Blob;
+        match &self {
+            Blob(blob) => blob.serialize(),
+        }
+    }
 }
 
 pub struct BlobObject {
@@ -12,24 +36,18 @@ pub struct BlobObject {
 
 impl BlobObject {
     pub fn new() -> Self {
-        let ret = BlobObject { data: Vec::new() };
-        ret.init();
-        ret
+        BlobObject { data: Vec::new() }
     }
 
     pub fn from(data: Vec<u8>) -> Self {
         Self { data }
     }
-}
 
-impl GitObject for BlobObject {
-    fn init(&self) {}
-
-    fn serialize(&self) -> &[u8] {
-        todo!()
+    fn serialize(&self) -> &Vec<u8> {
+        &self.data
     }
 
-    fn deserialize(&self) -> Box<dyn GitObject> {
+    fn deserialize(&self) -> BlobObject {
         todo!()
     }
 }

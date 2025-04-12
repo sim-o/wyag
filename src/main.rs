@@ -1,6 +1,12 @@
-use std::{error::Error, path::PathBuf, process::exit};
+use std::{
+    error::Error,
+    fmt::Display,
+    io::Write,
+    path::{Path, PathBuf},
+    process::exit,
+};
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 mod repository;
 use repository::Repository;
@@ -15,6 +21,20 @@ struct Cli {
     command: Commands,
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+enum ObjectType {
+    Blob,
+    Commit,
+    Tag,
+    Tree,
+}
+
+impl Display for ObjectType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&format!("{:?}", self).to_string().to_lowercase())
+    }
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Initialise a new empty repository.
@@ -23,12 +43,32 @@ enum Commands {
         path: PathBuf,
     },
 
-    ReadObject {
-        /// Repository path to inspect.
-        path: PathBuf,
+    /// Provide content of repository objects.
+    CatObject {
+        /// Specify the type.
+        #[arg(value_enum)]
+        object_type: ObjectType,
 
-        /// Object hash.
-        sha1: String,
+        /// The object to display.
+        name: String,
+
+        /// Path to repository.
+        #[arg(short, long)]
+        repository: Option<PathBuf>,
+    },
+
+    /// Compute object ID and optionally create an object from a file.
+    HashObject {
+        /// Specify the type.
+        #[arg(short, long, default_value_t = ObjectType::Blob)]
+        _type: ObjectType,
+
+        /// Actually write the object into the database.
+        #[arg(short, long)]
+        write: bool,
+
+        /// Read object from <FILE>.
+        file: PathBuf,
     },
 }
 
@@ -37,7 +77,12 @@ fn main() {
 
     let result: Result<_, Box<dyn std::error::Error>> = match cli.command {
         Commands::Init { path } => init(path),
-        Commands::ReadObject { path, sha1 } => read_object(path, sha1),
+        Commands::CatObject {
+            object_type,
+            name,
+            repository,
+        } => read_object(repository.unwrap_or(PathBuf::from(".")), object_type, name),
+        Commands::HashObject { _type, write, file } => write_object(_type, file, write),
     };
 
     if let Err(error) = result {
@@ -48,10 +93,22 @@ fn main() {
     println!("Success!");
 }
 
-fn read_object(path: PathBuf, sha1: String) -> Result<(), Box<dyn Error>> {
-    let repo = Repository::find(&path)?;
-    let obj = repo.object_read(&sha1)?;
-    println!("{}", &*obj);
+fn write_object(_type: ObjectType, file: PathBuf, write: bool) -> Result<(), Box<dyn Error>> {
+    let repo = Repository::find(Path::new("."))?;
+    let sha1 = repo.object_hash(&file, _type, write)?;
+    println!("{}", sha1);
+    Ok(())
+}
+
+fn read_object(
+    repository: PathBuf,
+    object_type: ObjectType,
+    name: String,
+) -> Result<(), Box<dyn Error>> {
+    let repo = Repository::find(&repository)?;
+    let sha1 = repo.find_object(object_type, name)?;
+    let obj = repo.read_object(&sha1)?;
+    std::io::stdout().write_all(obj.serialize())?;
     Ok(())
 }
 

@@ -1,16 +1,24 @@
 extern crate libflate;
+extern crate sha1;
+
+use bytes::BufMut;
+use sha1::{Digest, Sha1};
 
 use std::{
+    error::Error,
     fs::{File, create_dir_all},
-    io::{BufReader, Read, Write},
+    io::{BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     str::from_utf8,
 };
 
 use configparser::ini::Ini;
-use libflate::zlib::Decoder;
+use libflate::zlib::{Decoder, Encoder};
 
-use crate::gitobject::{BlobObject, GitObject};
+use crate::{
+    ObjectType,
+    gitobject::{BlobObject, GitObject},
+};
 
 pub struct Repository {
     worktree: PathBuf,
@@ -143,7 +151,7 @@ impl Repository {
         Ok(())
     }
 
-    pub fn object_read(&self, sha: &str) -> Result<Box<dyn GitObject>, Box<dyn std::error::Error>> {
+    pub fn read_object(&self, sha: &str) -> Result<GitObject, Box<dyn std::error::Error>> {
         let path = self
             .repo_file(&Path::new("objects").join(&sha[..2]).join(&sha[2..]), false)
             .ok_or(format!("Could not load object {}", sha))?;
@@ -152,8 +160,6 @@ impl Repository {
         }
 
         let mut file = File::open(path)?;
-        // let mut reader = BufReader::new(file);
-
         let mut decoder =
             Decoder::new(&mut file).map_err(|e| format!("Error decompressing: {}", e))?;
         let mut raw: Vec<u8> = Vec::new();
@@ -182,14 +188,82 @@ impl Repository {
 
         let object_type = &raw[..type_idx];
         let result = match object_type {
-            b"blob" => BlobObject::from(Vec::from(&raw[size_idx + 1..])),
+            b"blob" => {
+                let blob = BlobObject::from(Vec::from(&raw[size_idx + 1..]));
+                GitObject::Blob(blob)
+            }
             _ => todo!(
                 "unhandled type: {}",
                 from_utf8(object_type).unwrap_or("--unknown--")
             ),
         };
 
-        Ok(Box::new(result))
+        Ok(result)
+    }
+
+    pub fn find_object(&self, _: ObjectType, name: String) -> Result<String, Box<dyn Error>> {
+        Ok(name)
+    }
+
+    pub fn write_object(&self, obj: &GitObject, write: bool) -> Result<String, Box<dyn Error>> {
+        let bytes = {
+            let serialized = obj.serialize();
+            let mut writer = Vec::new().writer();
+            writer.write_all(obj.name())?;
+            writer.write_all(b" ")?;
+            writer.write_all(serialized.len().to_string().as_bytes())?;
+            writer.write_all(b"\x00")?;
+            writer.write_all(serialized)?;
+            writer.into_inner()
+        };
+
+        let sha1 = {
+            let mut hasher = Sha1::new();
+            hasher.update(&bytes);
+            hex(&hasher.finalize()[..])
+        };
+
+        if write {
+            let file = self
+                .repo_file(
+                    &Path::new("objects").join(&sha1[..2]).join(&sha1[2..]),
+                    true,
+                )
+                .ok_or(format!("could not create object: {}", sha1))?;
+
+            let compressed = {
+                let mut encoder = Encoder::new(Vec::new())?;
+                encoder.write_all(&bytes)?;
+                encoder.finish().into_result()?
+            };
+
+            let mut object =
+                BufWriter::new(File::open(file).or(Err("Failed to open object file"))?);
+            object.write_all(&compressed)?;
+        }
+
+        Ok(sha1)
+    }
+
+    pub fn object_hash(
+        &self,
+        path: &Path,
+        object_type: ObjectType,
+        write: bool,
+    ) -> Result<String, Box<dyn Error>> {
+        let data = {
+            let mut file = File::open(path)?;
+            let mut buf = Vec::new();
+            file.read_to_end(&mut buf)?;
+            buf
+        };
+
+        let obj = match object_type {
+            ObjectType::Blob => GitObject::Blob(BlobObject::from(data)),
+            _ => todo!(),
+        };
+
+        self.write_object(&obj, write)
     }
 }
 
@@ -199,4 +273,8 @@ fn default_config() -> Ini {
     ini.setstr("core", "filemode", Some("false"));
     ini.setstr("core", "bare", Some("false"));
     ini
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:x}", b)).collect::<String>()
 }
