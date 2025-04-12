@@ -1,0 +1,9 @@
+[package]
+name = "myag"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.5.35", features = ["derive"] }
+configparser = "3.1.0"
+libflate = "2.1.0"
