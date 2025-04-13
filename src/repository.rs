@@ -5,6 +5,7 @@ use bytes::BufMut;
 use sha1::{Digest, Sha1};
 
 use std::{
+    collections::HashMap,
     error::Error,
     fs::{File, create_dir_all},
     io::{BufReader, BufWriter, Read, Write},
@@ -17,11 +18,11 @@ use libflate::zlib::{Decoder, Encoder};
 
 use crate::{
     ObjectType,
-    gitobject::{BlobObject, GitObject},
+    gitobject::{BlobObject, CommitObject, GitObject},
 };
 
 pub struct Repository {
-    worktree: PathBuf,
+    pub worktree: PathBuf,
     gitdir: PathBuf,
     conf: Option<Ini>,
 }
@@ -187,11 +188,10 @@ impl Repository {
         }
 
         let object_type = &raw[..type_idx];
+        let data = Vec::from(&raw[size_idx + 1..]);
         let result = match object_type {
-            b"blob" => {
-                let blob = BlobObject::from(Vec::from(&raw[size_idx + 1..]));
-                GitObject::Blob(blob)
-            }
+            b"blob" => GitObject::Blob(BlobObject::from(data)),
+            b"commit" => GitObject::Commit(CommitObject::from(data)?),
             _ => todo!(
                 "unhandled type: {}",
                 from_utf8(object_type).unwrap_or("--unknown--")
@@ -213,7 +213,7 @@ impl Repository {
             writer.write_all(b" ")?;
             writer.write_all(serialized.len().to_string().as_bytes())?;
             writer.write_all(b"\x00")?;
-            writer.write_all(serialized)?;
+            writer.write_all(&serialized)?;
             writer.into_inner()
         };
 

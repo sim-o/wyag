@@ -12,6 +12,7 @@ mod repository;
 use repository::Repository;
 
 mod gitobject;
+mod kvlm;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -89,8 +90,6 @@ fn main() {
         println!("Error: {}", error);
         exit(1);
     }
-
-    println!("Success!");
 }
 
 fn write_object(_type: ObjectType, file: PathBuf, write: bool) -> Result<(), Box<dyn Error>> {
@@ -108,11 +107,13 @@ fn read_object(
     let repo = Repository::find(&repository)?;
     let sha1 = repo.find_object(object_type, name)?;
     let obj = repo.read_object(&sha1)?;
-    std::io::stdout().write_all(obj.serialize())?;
+    std::io::stdout().write_all(&obj.serialize())?;
     Ok(())
 }
 
 fn init(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let repo = Repository::new(&path, true)?;
-    repo.init()
+    repo.init()?;
+    println!("Created repository at: {}", repo.worktree.to_string_lossy());
+    Ok(())
 }
