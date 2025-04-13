@@ -12,6 +12,7 @@ mod repository;
 use repository::Repository;
 
 mod gitobject;
+mod hex;
 mod kvlm;
 
 #[derive(Parser)]

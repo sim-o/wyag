@@ -5,7 +5,6 @@ use bytes::BufMut;
 use sha1::{Digest, Sha1};
 
 use std::{
-    collections::HashMap,
     error::Error,
     fs::{File, create_dir_all},
     io::{BufReader, BufWriter, Read, Write},
@@ -18,7 +17,8 @@ use libflate::zlib::{Decoder, Encoder};
 
 use crate::{
     ObjectType,
-    gitobject::{BlobObject, CommitObject, GitObject},
+    gitobject::{BlobObject, CommitObject, GitObject, TreeObject},
+    hex::hex,
 };
 
 pub struct Repository {
@@ -191,7 +191,8 @@ impl Repository {
         let data = Vec::from(&raw[size_idx + 1..]);
         let result = match object_type {
             b"blob" => GitObject::Blob(BlobObject::from(data)),
-            b"commit" => GitObject::Commit(CommitObject::from(data)?),
+            b"commit" => GitObject::Commit(CommitObject::from(&data)?),
+            b"tree" => GitObject::Tree(TreeObject::from(&data)?),
             _ => todo!(
                 "unhandled type: {}",
                 from_utf8(object_type).unwrap_or("--unknown--")
@@ -273,8 +274,4 @@ fn default_config() -> Ini {
     ini.setstr("core", "filemode", Some("false"));
     ini.setstr("core", "bare", Some("false"));
     ini
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:x}", b)).collect::<String>()
 }
