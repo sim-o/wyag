@@ -55,7 +55,7 @@ enum Commands {
         name: String,
 
         /// Path to repository.
-        #[arg(short, long)]
+        #[arg(long)]
         repository: Option<PathBuf>,
     },
 
@@ -72,6 +72,20 @@ enum Commands {
         /// Read object from <FILE>.
         file: PathBuf,
     },
+
+    /// Pretty-print a tree object.
+    LsTree {
+        /// Recurse into sub-trees.
+        #[arg(short, long)]
+        recurse: bool,
+
+        /// Path to repository.
+        #[arg(long)]
+        repository: Option<PathBuf>,
+
+        /// A tree-ish object.
+        tree: String,
+    },
 }
 
 fn main() {
@@ -85,12 +99,22 @@ fn main() {
             repository,
         } => read_object(repository.unwrap_or(PathBuf::from(".")), object_type, name),
         Commands::HashObject { _type, write, file } => write_object(_type, file, write),
+        Commands::LsTree {
+            recurse,
+            tree,
+            repository,
+        } => ls_tree(&repository.unwrap_or(PathBuf::new()), tree, recurse),
     };
 
     if let Err(error) = result {
         println!("Error: {}", error);
         exit(1);
     }
+}
+
+fn ls_tree(path: &Path, tree: String, recurse: bool) -> Result<(), Box<dyn Error>> {
+    let repo = Repository::find(path)?;
+    repo.ls_tree(&tree, recurse, Path::new("."))
 }
 
 fn write_object(_type: ObjectType, file: PathBuf, write: bool) -> Result<(), Box<dyn Error>> {
@@ -106,7 +130,7 @@ fn read_object(
     name: String,
 ) -> Result<(), Box<dyn Error>> {
     let repo = Repository::find(&repository)?;
-    let sha1 = repo.find_object(object_type, name)?;
+    let sha1 = repo.find_object(object_type, &name)?;
     let obj = repo.read_object(&sha1)?;
     std::io::stdout().write_all(&obj.serialize())?;
     Ok(())

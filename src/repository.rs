@@ -6,6 +6,7 @@ use sha1::{Digest, Sha1};
 
 use std::{
     error::Error,
+    fmt::format,
     fs::{File, create_dir_all},
     io::{BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
@@ -32,6 +33,8 @@ impl Repository {
         let gitdir = path.join(".git");
         let config_file = gitdir.join("config");
 
+        println!("constructing repo");
+
         let conf = if config_file.is_file() {
             let file = File::open(config_file)?;
             let mut reader = BufReader::new(file);
@@ -56,6 +59,8 @@ impl Repository {
         if conf.is_none() && !force {
             return Err("config file does not exist".to_string())?;
         }
+
+        println!("constructed");
 
         Ok(Self {
             worktree: path.into(),
@@ -178,6 +183,7 @@ impl Repository {
             .ok_or("object corrupt: missing size")?
             + type_idx;
 
+        println!("reading size...");
         let size = std::str::from_utf8(&raw[type_idx + 1..size_idx])?.parse::<usize>()?;
         if size != raw.len() - size_idx - 1 {
             Err(format!(
@@ -189,6 +195,12 @@ impl Repository {
 
         let object_type = &raw[..type_idx];
         let data = Vec::from(&raw[size_idx + 1..]);
+        println!(
+            "type = '{}' size = {}",
+            from_utf8(object_type).unwrap(),
+            size
+        );
+
         let result = match object_type {
             b"blob" => GitObject::Blob(BlobObject::from(data)),
             b"commit" => GitObject::Commit(CommitObject::from(&data)?),
@@ -202,8 +214,8 @@ impl Repository {
         Ok(result)
     }
 
-    pub fn find_object(&self, _: ObjectType, name: String) -> Result<String, Box<dyn Error>> {
-        Ok(name)
+    pub fn find_object(&self, _: ObjectType, name: &str) -> Result<String, Box<dyn Error>> {
+        Ok(name.to_string())
     }
 
     pub fn write_object(&self, obj: &GitObject, write: bool) -> Result<String, Box<dyn Error>> {
@@ -265,6 +277,47 @@ impl Repository {
         };
 
         self.write_object(&obj, write)
+    }
+
+    pub fn ls_tree(
+        &self,
+        reference: &str,
+        recurse: bool,
+        path: &Path,
+    ) -> Result<(), Box<dyn Error>> {
+        println!("finding object {}", reference);
+        let sha1 = self.find_object(ObjectType::Tree, reference)?;
+        println!("reading object {}", sha1);
+        let object = match self.read_object(&sha1)? {
+            GitObject::Tree(tree) => tree,
+            _ => Err("object not a tree")?,
+        };
+
+        println!("iterating leaf {}", path.to_string_lossy());
+
+        object.for_each_leaf(|item| {
+            let _type = match &item.mode[..2] {
+                "04" => "tree",
+                "10" | "12" => "blob",
+                "16" => "commit",
+                _ => panic!("weird TreeLeaf mode {}", &item.mode[..2]),
+            };
+
+            if recurse && _type == "tree" {
+                self.ls_tree(&hex(&item.sha1), recurse, &path.join(&item.path))
+                    .expect("Failed to descend tree");
+            } else {
+                println!(
+                    "{} {} {} {}",
+                    item.mode,
+                    _type,
+                    hex(&item.sha1),
+                    path.join(&item.path).to_string_lossy()
+                );
+            }
+        });
+
+        Ok(())
     }
 }
 

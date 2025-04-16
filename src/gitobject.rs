@@ -94,15 +94,18 @@ pub struct TreeObject {
 impl TreeObject {
     pub fn from(data: &[u8]) -> Result<TreeObject, Box<dyn Error>> {
         let mut leaves = Vec::new();
-        let skip = data
-            .iter()
-            .position(|&b| b == b'\0')
-            .ok_or("tree object did not contain null")?;
+        // let skip = data
+        //     .iter()
+        //     .position(|&b| b == b'\0')
+        //     .ok_or("tree object did not contain null")?;
+        //
+        // println!(
+        //     "parsing size {}",
+        //     from_utf8(&data[..skip]).unwrap_or("could not parse utf8")
+        // );
+        // let size = from_utf8(&data[..skip])?.parse::<usize>()?;
 
-        let size = from_utf8(&data[..skip])?.parse::<usize>()?;
-
-        let mut rem = &data[skip + 1..];
-        assert_eq!(size, rem.len());
+        let mut rem = data;
 
         while !rem.is_empty() {
             let (leaf, len) = TreeLeaf::parse_one(rem)?;
@@ -112,6 +115,10 @@ impl TreeObject {
         Ok(Self {
             leaves: RefCell::new(leaves),
         })
+    }
+
+    pub fn for_each_leaf(&self, f: impl Fn(&TreeLeaf)) {
+        self.leaves.borrow().iter().for_each(f);
     }
 
     fn serialize(&self) -> Vec<u8> {
@@ -136,9 +143,9 @@ impl TreeObject {
 
 #[derive(PartialEq, Eq, Clone)]
 pub struct TreeLeaf {
-    mode: String,
-    path: PathBuf,
-    sha1: Vec<u8>,
+    pub mode: String,
+    pub path: PathBuf,
+    pub sha1: Vec<u8>,
 }
 
 impl Ord for TreeLeaf {
@@ -164,6 +171,7 @@ impl Debug for TreeLeaf {
 
 impl TreeLeaf {
     fn parse_one(data: &[u8]) -> Result<(Self, usize), Box<dyn Error>> {
+        println!("parsing TreeLeaf...");
         let x = data
             .iter()
             .position(|&b| b == b' ')
@@ -185,6 +193,7 @@ impl TreeLeaf {
         }
         let sha1 = data[y + 1..y + 21].to_vec();
 
+        println!("\tparsed TreeLeaf {}", path.to_string_lossy());
         Ok((TreeLeaf { mode, path, sha1 }, y + 21))
     }
 
