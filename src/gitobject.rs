@@ -1,8 +1,15 @@
 use crate::{
-    hex::{hex, to_bytes},
+    hex::hex,
     kvlm::{kvlm_parse, kvlm_serialize},
 };
-use std::{collections::HashMap, error::Error, fmt::Display, path::PathBuf, str::from_utf8};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    error::Error,
+    fmt::{Debug, Display},
+    path::PathBuf,
+    str::from_utf8,
+};
 
 pub enum GitObject {
     Blob(BlobObject),
@@ -69,7 +76,7 @@ pub struct CommitObject {
 }
 
 impl CommitObject {
-    pub fn from(data: &Vec<u8>) -> Result<CommitObject, Box<dyn Error>> {
+    pub fn from(data: &[u8]) -> Result<CommitObject, Box<dyn Error>> {
         Ok(CommitObject {
             kvlm: kvlm_parse(data)?,
         })
@@ -79,8 +86,9 @@ impl CommitObject {
     }
 }
 
+#[derive(Debug)]
 pub struct TreeObject {
-    leaves: Vec<TreeLeaf>,
+    leaves: RefCell<Vec<TreeLeaf>>,
 }
 
 impl TreeObject {
@@ -89,28 +97,69 @@ impl TreeObject {
         let skip = data
             .iter()
             .position(|&b| b == b'\0')
-            .ok_or("tree object did not contain null")?
-            + 1;
-        let mut rem = &data[skip..];
+            .ok_or("tree object did not contain null")?;
+
+        let size = from_utf8(&data[..skip])?.parse::<usize>()?;
+
+        let mut rem = &data[skip + 1..];
+        assert_eq!(size, rem.len());
+
         while !rem.is_empty() {
             let (leaf, len) = TreeLeaf::parse_one(rem)?;
-            println!("read leaf {}", leaf.path.to_string_lossy());
             leaves.push(leaf);
             rem = &rem[len..];
         }
-        Ok(Self { leaves })
+        Ok(Self {
+            leaves: RefCell::new(leaves),
+        })
     }
 
     fn serialize(&self) -> Vec<u8> {
-        todo!()
+        {
+            self.leaves.borrow_mut().sort();
+        }
+        let data = self
+            .leaves
+            .borrow()
+            .iter()
+            .flat_map(|l| l.serialize())
+            .collect::<Vec<u8>>();
+
+        data.len()
+            .to_string()
+            .bytes()
+            .chain(b"\0".iter().copied())
+            .chain(data.iter().copied())
+            .collect::<Vec<u8>>()
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Eq, Clone)]
 pub struct TreeLeaf {
     mode: String,
     path: PathBuf,
-    sha1: String,
+    sha1: Vec<u8>,
+}
+
+impl Ord for TreeLeaf {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.path.cmp(&other.path)
+    }
+}
+impl PartialOrd for TreeLeaf {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Debug for TreeLeaf {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!(
+            "TreeLeaf {{ mode = {}, path = {}, sha1 = {} }}",
+            self.mode,
+            self.path.to_string_lossy(),
+            hex(&self.sha1)
+        ))
+    }
 }
 
 impl TreeLeaf {
@@ -134,25 +183,31 @@ impl TreeLeaf {
         if data.len() < y + 21 {
             Err("tree leaf truncated in sha1")?;
         }
-        let sha1 = hex(&data[y + 1..y + 21]);
+        let sha1 = data[y + 1..y + 21].to_vec();
 
         Ok((TreeLeaf { mode, path, sha1 }, y + 21))
     }
 
     fn serialize(&self) -> Vec<u8> {
         let mut res = Vec::new();
-        res.append(&mut self.mode.as_bytes().to_vec());
+        let mode = if self.mode.len() == 6 && self.mode.starts_with("0") {
+            &self.mode.chars().skip(1).collect()
+        } else {
+            &self.mode
+        };
+
+        res.append(&mut mode.as_bytes().to_vec());
         res.push(b' ');
         res.append(&mut self.path.to_string_lossy().as_bytes().to_vec());
         res.push(b'\0');
-        res.append(&mut to_bytes(&self.sha1).to_vec());
+        res.append(&mut self.sha1.clone());
         res
     }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::gitobject::TreeLeaf;
+    use crate::{gitobject::TreeLeaf, hex::to_bytes};
 
     use super::TreeObject;
     use std::{fs::File, io::Read, path::PathBuf};
@@ -166,84 +221,14 @@ mod test {
         let tree = TreeObject::from(&buf[skip..]).unwrap();
 
         assert_eq!(
-            tree.leaves,
-            vec![
-                TreeLeaf {
-                    path: PathBuf::from(".github"),
-                    mode: "040000".to_string(),
-                    sha1: "a0ef2d9bb06480d8faceb96832b3ed26eb57412".to_string()
-                },
-                TreeLeaf {
-                    path: PathBuf::from(".gitignore"),
-                    mode: "100644".to_string(),
-                    sha1: "20717a631f8661cb909e6ef3462965ad8b56fba6".to_string()
-                },
-                TreeLeaf {
-                    path: PathBuf::from(".husky"),
-                    mode: "040000".to_string(),
-                    sha1: "522546b7b66d4cba2aab71dc1499282855e19fad".to_string()
-                },
-                TreeLeaf {
-                    path: PathBuf::from(".prettierrc.yaml"),
-                    mode: "100644".to_string(),
-                    sha1: "b8ebc29292668a38d4434ab6e3c9be6df817fe".to_string()
-                },
-                TreeLeaf {
-                    path: PathBuf::from("README.md"),
-                    mode: "100644".to_string(),
-                    sha1: "a96b3e89693ae60d11a8629f8747fb7db52d6d2".to_string(),
-                },
-                TreeLeaf {
-                    path: PathBuf::from("assets"),
-                    mode: "040000".to_string(),
-                    sha1: "74f5d9674588fb5d84ed1d2805c9febfedfc05".to_string()
-                },
-                TreeLeaf {
-                    path: PathBuf::from("eslint.config.mjs"),
-                    mode: "100644".to_string(),
-                    sha1: "f6f97552d26aaabe78d3543748735b9943437".to_string()
-                },
-                TreeLeaf {
-                    path: PathBuf::from("github.png"),
-                    mode: "100644".to_string(),
-                    sha1: "dfc1ca2489c5d2bbb4642e923514f92c75a7fde".to_string()
-                },
-                TreeLeaf {
-                    path: PathBuf::from("jest.config.ts"),
-                    mode: "100644".to_string(),
-                    sha1: "448f53c9d4f27a56ae9a21f5bbcff5e88b9dee5".to_string()
-                },
-                TreeLeaf {
-                    path: PathBuf::from("linkedin.png"),
-                    mode: "100644".to_string(),
-                    sha1: "dd5b2e77baf34226b94a5ed5ccb2e6ac78b3dba".to_string()
-                },
-                TreeLeaf {
-                    path: PathBuf::from("package-lock.json"),
-                    mode: "100644".to_string(),
-                    sha1: "a93a84cb1ae5ce638037c5aef4071dbf1f60".to_string()
-                },
-                TreeLeaf {
-                    path: PathBuf::from("package.json"),
-                    mode: "100644".to_string(),
-                    sha1: "e124e21333b86f4f4729f21f1cd9619ce631a9d".to_string()
-                },
-                TreeLeaf {
-                    path: PathBuf::from("portrait.png"),
-                    mode: "100644".to_string(),
-                    sha1: "776246317496c7cac59e6eea5b815f9b9accb8".to_string()
-                },
-                TreeLeaf {
-                    path: PathBuf::from("resume.yaml"),
-                    mode: "100644".to_string(),
-                    sha1: "fc3d35c0c60a4b3cd039f82cf9bf8549b5cfe".to_string()
-                },
-                TreeLeaf {
-                    path: PathBuf::from("src"),
-                    mode: "040000".to_string(),
-                    sha1: "2ffe9e9c1e894c1594525397bd26f8bcc73e11b".to_string()
-                },
-            ]
+            tree.leaves.borrow()[0],
+            TreeLeaf {
+                path: PathBuf::from(".github"),
+                mode: "040000".to_string(),
+                sha1: to_bytes("a0ef2d9bb064800d8faceb96832b3ed26eb57412").unwrap()
+            }
         );
+
+        assert_eq!(tree.serialize(), buf[skip..].to_vec());
     }
 }

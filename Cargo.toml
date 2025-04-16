@@ -7,5 +7,6 @@ edition = "2024"
 bytes = "1.10.1"
 clap = { version = "4.5.35", features = ["derive"] }
 configparser = "3.1.0"
+hex = "0.4.3"
 libflate = "2.1.0"
 sha1 = "0.10.6"
