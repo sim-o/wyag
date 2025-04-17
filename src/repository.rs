@@ -176,12 +176,12 @@ impl Repository {
             .position(|&b| b == b' ')
             .ok_or("object corrupt: missing type")?;
 
-        let size_idx = raw
-            .iter()
-            .skip(type_idx)
-            .position(|&b| b == b'\x00')
-            .ok_or("object corrupt: missing size")?
-            + type_idx;
+        let size_idx = type_idx
+            + raw
+                .iter()
+                .skip(type_idx)
+                .position(|&b| b == b'\x00')
+                .ok_or("object corrupt: missing size")?;
 
         println!("reading size...");
         let size = std::str::from_utf8(&raw[type_idx + 1..size_idx])?.parse::<usize>()?;

@@ -94,19 +94,8 @@ pub struct TreeObject {
 impl TreeObject {
     pub fn from(data: &[u8]) -> Result<TreeObject, Box<dyn Error>> {
         let mut leaves = Vec::new();
-        // let skip = data
-        //     .iter()
-        //     .position(|&b| b == b'\0')
-        //     .ok_or("tree object did not contain null")?;
-        //
-        // println!(
-        //     "parsing size {}",
-        //     from_utf8(&data[..skip]).unwrap_or("could not parse utf8")
-        // );
-        // let size = from_utf8(&data[..skip])?.parse::<usize>()?;
 
         let mut rem = data;
-
         while !rem.is_empty() {
             let (leaf, len) = TreeLeaf::parse_one(rem)?;
             leaves.push(leaf);
@@ -125,18 +114,10 @@ impl TreeObject {
         {
             self.leaves.borrow_mut().sort();
         }
-        let data = self
-            .leaves
+        self.leaves
             .borrow()
             .iter()
             .flat_map(|l| l.serialize())
-            .collect::<Vec<u8>>();
-
-        data.len()
-            .to_string()
-            .bytes()
-            .chain(b"\0".iter().copied())
-            .chain(data.iter().copied())
             .collect::<Vec<u8>>()
     }
 }
@@ -183,8 +164,9 @@ impl TreeLeaf {
             mode.insert(0, '0');
         }
 
-        let y = x + data[x..]
+        let y = x + data
             .iter()
+            .skip(x)
             .position(|&b| b == b'\0')
             .ok_or("tree leaf does not contain null")?;
         let path = PathBuf::from(from_utf8(&data[x + 1..y])?);
@@ -226,7 +208,7 @@ mod test {
         let mut f = File::open("test/tree").unwrap();
         let mut buf = Vec::new();
         f.read_to_end(&mut buf).unwrap();
-        let skip = buf.iter().position(|&b| b == b' ').unwrap_or(0) + 1;
+        let skip = buf.iter().position(|&b| b == b'\0').unwrap_or(0) + 1;
         let tree = TreeObject::from(&buf[skip..]).unwrap();
 
         assert_eq!(
