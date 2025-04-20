@@ -14,6 +14,8 @@ use repository::Repository;
 mod gitobject;
 mod hex;
 mod kvlm;
+mod pack;
+mod packindex;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -86,6 +88,16 @@ enum Commands {
         /// A tree-ish object.
         tree: String,
     },
+
+    /// Describe a pack file.
+    LsPack {
+        /// Path to repository.
+        #[arg(long)]
+        repository: Option<PathBuf>,
+
+        /// A packfile sha.
+        packfile: String,
+    },
 }
 
 fn main() {
@@ -104,12 +116,23 @@ fn main() {
             tree,
             repository,
         } => ls_tree(&repository.unwrap_or(PathBuf::new()), tree, recurse),
+        Commands::LsPack {
+            repository,
+            packfile,
+        } => ls_pack(&repository.unwrap_or(PathBuf::new()), packfile),
     };
 
     if let Err(error) = result {
         println!("Error: {}", error);
         exit(1);
     }
+}
+
+fn ls_pack(path: &Path, packfile: String) -> Result<(), Box<dyn Error>> {
+    let repository = Repository::find(path)?;
+    let objects = repository.read_packfile(&packfile)?;
+    objects.iter().for_each(|o| println!("object: {}", o));
+    Ok(())
 }
 
 fn ls_tree(path: &Path, tree: String, recurse: bool) -> Result<(), Box<dyn Error>> {
@@ -131,7 +154,7 @@ fn read_object(
 ) -> Result<(), Box<dyn Error>> {
     let repo = Repository::find(&repository)?;
     let sha1 = repo.find_object(object_type, &name)?;
-    let obj = repo.read_object(&sha1)?;
+    let obj = repo.read_object_file(&sha1)?;
     std::io::stdout().write_all(&obj.serialize())?;
     Ok(())
 }

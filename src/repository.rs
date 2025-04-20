@@ -1,25 +1,24 @@
 extern crate libflate;
 extern crate sha1;
 
-use bytes::BufMut;
-use sha1::{Digest, Sha1};
-
 use std::{
     error::Error,
-    fmt::format,
-    fs::{File, create_dir_all},
+    fmt::Display,
+    fs::{create_dir_all, File},
     io::{BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     str::from_utf8,
 };
 
+use bytes::BufMut;
 use configparser::ini::Ini;
 use libflate::zlib::{Decoder, Encoder};
+use sha1::{Digest, Sha1};
 
 use crate::{
-    ObjectType,
     gitobject::{BlobObject, CommitObject, GitObject, TreeObject},
     hex::hex,
+    ObjectType,
 };
 
 pub struct Repository {
@@ -157,7 +156,7 @@ impl Repository {
         Ok(())
     }
 
-    pub fn read_object(&self, sha: &str) -> Result<GitObject, Box<dyn std::error::Error>> {
+    pub fn read_object_file(&self, sha: &str) -> Result<GitObject, Box<dyn std::error::Error>> {
         let path = self
             .repo_file(&Path::new("objects").join(&sha[..2]).join(&sha[2..]), false)
             .ok_or(format!("Could not load object {}", sha))?;
@@ -279,6 +278,20 @@ impl Repository {
         self.write_object(&obj, write)
     }
 
+    pub fn read_packfile(&self, packfile_sha: &str) -> Result<Vec<GitObject>, Box<dyn Error>> {
+        let path = self
+            .repo_file(
+                &Path::new("objects")
+                    .join("pack")
+                    .join(format!("pack-{}.pack", packfile_sha)),
+                false,
+            )
+            .ok_or("Packfile does not exist")?;
+
+        let reader = BufReader::new(File::open(path)?);
+        Pack::new(reader).read()
+    }
+
     pub fn ls_tree(
         &self,
         reference: &str,
@@ -288,7 +301,7 @@ impl Repository {
         println!("finding object {}", reference);
         let sha1 = self.find_object(ObjectType::Tree, reference)?;
         println!("reading object {}", sha1);
-        let object = match self.read_object(&sha1)? {
+        let object = match self.read_object_file(&sha1)? {
             GitObject::Tree(tree) => tree,
             _ => Err("object not a tree")?,
         };

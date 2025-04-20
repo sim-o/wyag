@@ -11,6 +11,7 @@ use std::{
     str::from_utf8,
 };
 
+#[derive(Debug)]
 pub enum GitObject {
     Blob(BlobObject),
     Commit(CommitObject),
@@ -51,6 +52,7 @@ impl GitObject {
     }
 }
 
+#[derive(Debug)]
 pub struct BlobObject {
     data: Vec<u8>,
 }
@@ -71,6 +73,7 @@ impl Display for BlobObject {
     }
 }
 
+#[derive(Debug)]
 pub struct CommitObject {
     kvlm: HashMap<String, Vec<Vec<u8>>>,
 }
@@ -152,7 +155,6 @@ impl Debug for TreeLeaf {
 
 impl TreeLeaf {
     fn parse_one(data: &[u8]) -> Result<(Self, usize), Box<dyn Error>> {
-        println!("parsing TreeLeaf...");
         let x = data
             .iter()
             .position(|&b| b == b' ')
@@ -175,7 +177,6 @@ impl TreeLeaf {
         }
         let sha1 = data[y + 1..y + 21].to_vec();
 
-        println!("\tparsed TreeLeaf {}", path.to_string_lossy());
         Ok((TreeLeaf { mode, path, sha1 }, y + 21))
     }
 
