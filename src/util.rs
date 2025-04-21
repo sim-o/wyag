@@ -1,0 +1,37 @@
+use std::error::Error;
+use std::io;
+use std::io::{BufReader, Read};
+
+pub fn read_byte<T: Read>(reader: &mut BufReader<T>) -> io::Result<u8> {
+    let mut buf = [0; 1];
+    reader.read_exact(&mut buf)?;
+    Ok(buf[0])
+}
+
+pub fn parse_variable_length<T: Read>(reader: &mut BufReader<T>) -> Result<usize, Box<dyn Error>> {
+    let mut expanded: usize = 0;
+    let mut shift = 0;
+    loop {
+        let byte = read_byte(reader)?;
+        expanded |= byte as usize & 0x7f << shift;
+        shift += 7;
+        if byte & 0x80 == 0 {
+            break;
+        }
+    }
+    Ok(expanded)
+}
+
+pub fn parse_offset_delta<T: Read>(reader: &mut BufReader<T>) -> Result<usize, Box<dyn Error>> {
+    let mut b = read_byte(reader)?;
+    let mut offset = b as usize & 0x7f;
+
+    while b & 0x80 > 0 {
+        offset += 1;
+        offset <<= 7;
+        b = read_byte(reader)?;
+        offset += b as usize & 0x7f;
+    }
+
+    Ok(offset)
+}

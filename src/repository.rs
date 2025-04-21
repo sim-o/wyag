@@ -3,7 +3,6 @@ extern crate sha1;
 
 use std::{
     error::Error,
-    fmt::Display,
     fs::{create_dir_all, File},
     io::{BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
@@ -12,14 +11,16 @@ use std::{
 
 use bytes::BufMut;
 use configparser::ini::Ini;
+use hex::{decode, ToHex};
 use libflate::zlib::{Decoder, Encoder};
 use sha1::{Digest, Sha1};
 
 use crate::{
     gitobject::{BlobObject, CommitObject, GitObject, TreeObject},
-    hex::hex,
     ObjectType,
 };
+use crate::pack::Pack;
+use crate::packindex::PackIndex;
 
 pub struct Repository {
     pub worktree: PathBuf,
@@ -28,7 +29,7 @@ pub struct Repository {
 }
 
 impl Repository {
-    pub fn new(path: &Path, force: bool) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(path: &Path, force: bool) -> Result<Self, Box<dyn Error>> {
         let gitdir = path.join(".git");
         let config_file = gitdir.join("config");
 
@@ -68,7 +69,7 @@ impl Repository {
         })
     }
 
-    pub fn find(orig: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn find(orig: &Path) -> Result<Self, Box<dyn Error>> {
         let mut path = if orig.is_absolute() {
             orig
         } else {
@@ -107,7 +108,7 @@ impl Repository {
         Some(file_path)
     }
 
-    pub fn init(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn init(&self) -> Result<(), Box<dyn Error>> {
         if self.worktree.exists() {
             if !self.worktree.is_dir() {
                 Err(format!(
@@ -150,15 +151,14 @@ impl Repository {
 
         for (f, contents) in files {
             let file = File::create_new(self.gitdir.join(f))?;
-            std::io::BufWriter::new(file).write_all(contents.as_bytes())?;
+            BufWriter::new(file).write_all(contents.as_bytes())?;
         }
 
         Ok(())
     }
 
-    pub fn read_object_file(&self, sha: &str) -> Result<GitObject, Box<dyn std::error::Error>> {
-        let path = self
-            .repo_file(&Path::new("objects").join(&sha[..2]).join(&sha[2..]), false)
+    pub fn read_object_file(&self, sha: &str) -> Result<GitObject, Box<dyn Error>> {
+        let path = self.object_file_path(&sha)
             .ok_or(format!("Could not load object {}", sha))?;
         if !path.is_file() {
             Err(format!("file {} does not exist", path.to_string_lossy()))?;
@@ -177,13 +177,13 @@ impl Repository {
 
         let size_idx = type_idx
             + raw
-                .iter()
-                .skip(type_idx)
-                .position(|&b| b == b'\x00')
-                .ok_or("object corrupt: missing size")?;
+            .iter()
+            .skip(type_idx)
+            .position(|&b| b == b'\x00')
+            .ok_or("object corrupt: missing size")?;
 
         println!("reading size...");
-        let size = std::str::from_utf8(&raw[type_idx + 1..size_idx])?.parse::<usize>()?;
+        let size = from_utf8(&raw[type_idx + 1..size_idx])?.parse::<usize>()?;
         if size != raw.len() - size_idx - 1 {
             Err(format!(
                 "object corrupt: size {} does not match expected {}",
@@ -213,6 +213,55 @@ impl Repository {
         Ok(result)
     }
 
+    fn object_file_path(&self, sha: &str) -> Option<PathBuf> {
+        let path = Path::new("objects").join(&sha[..2]).join(&sha[2..]);
+        self.repo_file(&path, false)
+    }
+
+    pub fn read_object(&self, name: &str) -> Result<GitObject, Box<dyn Error>> {
+        if self.object_file_path(name).is_some() {
+            return self.read_object_file(name);
+        }
+
+        let sha1 = decode(name)?;
+
+        let (pack, offset) = self.repo_path(&Path::new("objects").join("pack"))
+            .read_dir()?
+            .filter_map(|p| {
+                if let Ok(p) = p {
+                    if let Some(name) = p.file_name().to_str() {
+                        let path = p.path();
+                        if name.starts_with("pack-") && name.ends_with(".idx") && path.is_file() {
+                            let id = name[5..name.len()-4].to_string();
+                            if let Ok(file) = File::open(path) {
+                                return Some(PackIndex::new(id, BufReader::new(file)));
+                            }
+                        }
+                    }
+                }
+                None
+            })
+            .flat_map(|mut pf| {
+                let result = pf.find(sha1.as_slice());
+                if let Ok(Some(offset)) = result {
+                    Some((pf.id(), offset))
+                } else {
+                    None
+                }
+            })
+            .next()
+            .unwrap();
+
+        let packfile_name = format!("pack-{}.pack", pack);
+        if let Some(packfile_path) = self.repo_file(
+            &Path::new("objects").join("pack").join(packfile_name), false) {
+            let mut packfile = Pack::new(BufReader::new(File::open(packfile_path)?));
+            packfile.read_object_at(offset)
+        } else {
+            Err("Failed to load packfile")?
+        }
+    }
+
     pub fn find_object(&self, _: ObjectType, name: &str) -> Result<String, Box<dyn Error>> {
         Ok(name.to_string())
     }
@@ -229,10 +278,10 @@ impl Repository {
             writer.into_inner()
         };
 
-        let sha1 = {
+        let sha1: String = {
             let mut hasher = Sha1::new();
             hasher.update(&bytes);
-            hex(&hasher.finalize()[..])
+            hasher.finalize().encode_hex()
         };
 
         if write {
@@ -317,14 +366,14 @@ impl Repository {
             };
 
             if recurse && _type == "tree" {
-                self.ls_tree(&hex(&item.sha1), recurse, &path.join(&item.path))
+                self.ls_tree(&item.sha1.encode_hex::<String>(), recurse, &path.join(&item.path))
                     .expect("Failed to descend tree");
             } else {
                 println!(
                     "{} {} {} {}",
                     item.mode,
                     _type,
-                    hex(&item.sha1),
+                    item.sha1.encode_hex::<String>(),
                     path.join(&item.path).to_string_lossy()
                 );
             }

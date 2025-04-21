@@ -12,10 +12,10 @@ mod repository;
 use repository::Repository;
 
 mod gitobject;
-mod hex;
 mod kvlm;
 mod pack;
 mod packindex;
+mod util;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -154,7 +154,7 @@ fn read_object(
 ) -> Result<(), Box<dyn Error>> {
     let repo = Repository::find(&repository)?;
     let sha1 = repo.find_object(object_type, &name)?;
-    let obj = repo.read_object_file(&sha1)?;
+    let obj = repo.read_object(&sha1)?;
     std::io::stdout().write_all(&obj.serialize())?;
     Ok(())
 }

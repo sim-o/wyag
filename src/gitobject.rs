@@ -1,7 +1,3 @@
-use crate::{
-    hex::hex,
-    kvlm::{kvlm_parse, kvlm_serialize},
-};
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -10,12 +6,21 @@ use std::{
     path::PathBuf,
     str::from_utf8,
 };
+use std::io::{BufReader, ErrorKind, Read};
+use bytes::Buf;
+use hex::ToHex;
+use crate::{
+    kvlm::{kvlm_parse, kvlm_serialize},
+};
+use crate::util::{parse_variable_length, read_byte};
 
 #[derive(Debug)]
 pub enum GitObject {
     Blob(BlobObject),
     Commit(CommitObject),
     Tree(TreeObject),
+    OffsetDelta(OffsetDeltaObject),
+    RefDelta(RefDeltaObject),
 }
 
 impl Display for GitObject {
@@ -30,6 +35,7 @@ impl Display for GitObject {
                 from_utf8(&commit_object.serialize()).unwrap_or("<<BINARY>>")
             )),
             GitObject::Tree(_) => f.write_str("tree {...}"),
+            _ => todo!(),
         }
     }
 }
@@ -40,6 +46,7 @@ impl GitObject {
             GitObject::Blob(_) => b"blob",
             GitObject::Commit(_) => b"commit",
             GitObject::Tree(_) => b"tree",
+            _ => todo!(),
         }
     }
 
@@ -48,6 +55,7 @@ impl GitObject {
             GitObject::Blob(blob) => blob.serialize(),
             GitObject::Commit(commit) => commit.serialize(),
             GitObject::Tree(tree) => tree.serialize(),
+            _ => todo!(),
         }
     }
 }
@@ -148,7 +156,7 @@ impl Debug for TreeLeaf {
             "TreeLeaf {{ mode = {}, path = {}, sha1 = {} }}",
             self.mode,
             self.path.to_string_lossy(),
-            hex(&self.sha1)
+            self.sha1.encode_hex::<String>()
         ))
     }
 }
@@ -197,12 +205,158 @@ impl TreeLeaf {
     }
 }
 
+#[derive(Debug)]
+pub struct DeltaObject {
+    base_size: usize,
+    expanded_size: usize,
+    instructions: Vec<DeltaInstruction>,
+}
+
+#[derive(Debug)]
+pub struct OffsetDeltaObject {
+    offset: usize,
+    delta: DeltaObject,
+}
+
+#[derive(Debug)]
+pub struct RefDeltaObject {
+    reference: [u8; 20],
+    delta: DeltaObject,
+}
+
+impl DeltaObject {
+    fn from(data: &Vec<u8>) -> Result<Self, Box<dyn Error>> {
+        parse_delta_data(data)
+    }
+}
+
+impl OffsetDeltaObject {
+    pub fn new(offset: usize, data: &Vec<u8>) -> Result<Self, Box<dyn Error>> {
+        Ok(Self {
+            offset,
+            delta: DeltaObject::from(data)?,
+        })
+    }
+}
+
+impl RefDeltaObject {
+    pub fn new(reference: [u8;20], data: &Vec<u8>) -> Result<Self, Box<dyn Error>> {
+        Ok(Self {
+            reference,
+            delta: parse_delta_data(data)?
+        })
+    }
+}
+
+fn parse_copy_instruction<T: Read>(
+    opcode: u8,
+    reader: &mut BufReader<T>,
+) -> Result<DeltaInstruction, Box<dyn Error>> {
+    let cp_off: usize = {
+        let mut cp_off: usize = 0;
+        for i in 0..4 {
+            if opcode & (1 << i) != 0 {
+                let x = read_byte(reader)?;
+                cp_off |= (x as usize) << (i * 8);
+            }
+        }
+        cp_off
+    };
+    let cp_size = {
+        let mut cp_size: usize = 0;
+        for i in 0..3 {
+            if opcode & (1 << (4 + i)) != 0 {
+                let x = read_byte(reader)?;
+                cp_size |= (x as usize) << (i * 8);
+            }
+        }
+        if cp_size == 0 {
+            cp_size = 0x10000;
+        }
+        cp_size
+    };
+
+    Ok(DeltaInstruction::Copy(cp_off, cp_size))
+}
+
+#[derive(Debug)]
+enum DeltaInstruction {
+    Copy(usize, usize),
+    Insert(Vec<u8>),
+}
+
+impl Display for DeltaInstruction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DeltaInstruction::Copy(offset, size) => {
+                f.write_fmt(format_args!("Copy({}, {})", offset, size))
+            }
+            DeltaInstruction::Insert(data) => {
+                let s = from_utf8(data);
+                f.write_fmt(format_args!(
+                    "Insert({})",
+                    s.map(|s| s.to_string()).unwrap_or_else(|e| {
+                        format!(
+                            "e({}, rem:{})",
+                            from_utf8(&data[0..e.valid_up_to()]).unwrap_or("<<REALLY_FAILED>>"),
+                            data.len() - e.valid_up_to()
+                        )
+                    })
+                ))
+            }
+        }
+    }
+}
+
+fn parse_delta_data(reader: &[u8]) -> Result<DeltaObject, Box<dyn Error>> {
+    let mut reader = BufReader::new(reader.reader());
+    let base_size = parse_variable_length(&mut reader)?;
+    let expanded_size = parse_variable_length(&mut reader)?;
+
+    let mut instructions = Vec::new();
+    loop {
+        let opcode = read_byte(&mut reader);
+        match opcode {
+            Err(err) => {
+                if err.kind() == ErrorKind::UnexpectedEof {
+                    break;
+                }
+                panic!("unexpected read error: {}", err);
+            }
+            Ok(opcode) => {
+                if opcode == 0 {
+                    panic!("invalid delta opcode 0");
+                }
+
+                let instr = if opcode & 0x80 == 0 {
+                    let data = {
+                        let mut buf = vec![0; opcode as usize];
+                        reader.read_exact(&mut buf)?;
+                        buf
+                    };
+                    DeltaInstruction::Insert(data)
+                } else {
+                    parse_copy_instruction(opcode, &mut reader)?
+                };
+
+                instructions.push(instr);
+            }
+        }
+    }
+    Ok(DeltaObject {
+        base_size,
+        expanded_size,
+        instructions
+    })
+}
+
 #[cfg(test)]
 mod test {
-    use crate::{gitobject::TreeLeaf, hex::to_bytes};
+    use std::{fs::File, io::Read, path::PathBuf};
+    use hex::FromHex;
+    use crate::{gitobject::TreeLeaf};
 
     use super::TreeObject;
-    use std::{fs::File, io::Read, path::PathBuf};
 
     #[test]
     fn deserialize_tree() {
@@ -217,7 +371,7 @@ mod test {
             TreeLeaf {
                 path: PathBuf::from(".github"),
                 mode: "040000".to_string(),
-                sha1: to_bytes("a0ef2d9bb064800d8faceb96832b3ed26eb57412").unwrap()
+                sha1: <[u8; 20]>::from_hex("a0ef2d9bb064800d8faceb96832b3ed26eb57412").unwrap().to_vec()
             }
         );
 
