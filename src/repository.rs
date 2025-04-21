@@ -233,6 +233,7 @@ impl Repository {
                         let path = p.path();
                         if name.starts_with("pack-") && name.ends_with(".idx") && path.is_file() {
                             let id = name[5..name.len()-4].to_string();
+                            println!("found pack {id}: {name}");
                             if let Ok(file) = File::open(path) {
                                 return Some(PackIndex::new(id, BufReader::new(file)));
                             }
@@ -244,6 +245,7 @@ impl Repository {
             .flat_map(|mut pf| {
                 let result = pf.find(sha1.as_slice());
                 if let Ok(Some(offset)) = result {
+                    println!("found pack offset {}", offset);
                     Some((pf.id(), offset))
                 } else {
                     None

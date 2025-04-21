@@ -2,14 +2,14 @@ use std::cmp::Ordering;
 use std::io;
 use std::io::{BufReader, Error, ErrorKind, Read, Seek, SeekFrom};
 
-use hex::ToHex;
+use hex::{FromHex, ToHex};
 
 pub struct PackIndex<T: Read + Seek> {
     id: String,
     reader: BufReader<T>,
 }
 
-const INDEX_HEADER: &'static [u8; 4] = b"\xfft0c";
+const INDEX_HEADER: &[u8; 4] = b"\xff\x74\x4f\x63";
 
 impl<T: Read + Seek> PackIndex<T> {
     pub fn new(id: String, reader: BufReader<T>) -> PackIndex<T> {
@@ -38,6 +38,7 @@ impl<T: Read + Seek> PackIndex<T> {
                 return Err(Error::from(ErrorKind::InvalidData));
             }
         }
+        println!("read header");
 
         let fanout = self.read_n_u32be(256)?;
 
