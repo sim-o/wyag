@@ -7,11 +7,11 @@ use std::{
     str::from_utf8,
 };
 use std::io::{BufReader, ErrorKind, Read};
+
 use bytes::Buf;
 use hex::ToHex;
-use crate::{
-    kvlm::{kvlm_parse, kvlm_serialize},
-};
+
+use crate::kvlm::{kvlm_parse, kvlm_serialize};
 use crate::util::{parse_variable_length, read_byte};
 
 #[derive(Debug)]
@@ -55,7 +55,8 @@ impl GitObject {
             GitObject::Blob(blob) => blob.serialize(),
             GitObject::Commit(commit) => commit.serialize(),
             GitObject::Tree(tree) => tree.serialize(),
-            _ => todo!(),
+            GitObject::OffsetDelta(delta) => format!("OffsetDelta({:?})", delta).into_bytes(),
+            GitObject::RefDelta(delta) => format!("RefDelta({:?})", delta).into_bytes(),
         }
     }
 }
@@ -196,11 +197,11 @@ impl TreeLeaf {
             &self.mode
         };
 
-        res.append(&mut mode.as_bytes().to_vec());
+        res.extend_from_slice(mode.as_bytes());
         res.push(b' ');
-        res.append(&mut self.path.to_string_lossy().as_bytes().to_vec());
+        res.extend_from_slice(self.path.to_string_lossy().as_bytes());
         res.push(b'\0');
-        res.append(&mut self.sha1.clone());
+        res.extend_from_slice(&self.sha1);
         res
     }
 }
@@ -214,24 +215,39 @@ pub struct DeltaObject {
 
 #[derive(Debug)]
 pub struct OffsetDeltaObject {
-    offset: usize,
-    delta: DeltaObject,
+    pub(crate) offset: u64,
+    pub(crate) delta: DeltaObject,
 }
 
 #[derive(Debug)]
 pub struct RefDeltaObject {
-    reference: [u8; 20],
-    delta: DeltaObject,
+    pub(crate) reference: [u8; 20],
+    pub(crate) delta: DeltaObject,
 }
 
 impl DeltaObject {
-    fn from(data: &Vec<u8>) -> Result<Self, Box<dyn Error>> {
+    pub fn from(data: &Vec<u8>) -> Result<Self, Box<dyn Error>> {
         parse_delta_data(data)
+    }
+
+    pub(crate) fn rebuild(&self, data: Vec<u8>) -> Vec<u8> {
+        let mut result = Vec::new();
+        for instr in self.instructions.iter() {
+            match instr {
+                DeltaInstruction::Copy(offset, size) => {
+                    result.extend_from_slice(&data[*offset..offset+size]);
+                }
+                DeltaInstruction::Insert(insert) => {
+                    result.extend_from_slice(&insert);
+                }
+            };
+        }
+        result
     }
 }
 
 impl OffsetDeltaObject {
-    pub fn new(offset: usize, data: &Vec<u8>) -> Result<Self, Box<dyn Error>> {
+    pub fn new(offset: u64, data: &Vec<u8>) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
             offset,
             delta: DeltaObject::from(data)?,
@@ -353,8 +369,10 @@ fn parse_delta_data(reader: &[u8]) -> Result<DeltaObject, Box<dyn Error>> {
 #[cfg(test)]
 mod test {
     use std::{fs::File, io::Read, path::PathBuf};
+
     use hex::FromHex;
-    use crate::{gitobject::TreeLeaf};
+
+    use crate::gitobject::TreeLeaf;
 
     use super::TreeObject;
 

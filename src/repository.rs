@@ -8,6 +8,7 @@ use std::{
     path::{Path, PathBuf},
     str::from_utf8,
 };
+use std::io::Seek;
 
 use bytes::BufMut;
 use configparser::ini::Ini;
@@ -16,10 +17,11 @@ use libflate::zlib::{Decoder, Encoder};
 use sha1::{Digest, Sha1};
 
 use crate::{
+    CommandObjectType,
     gitobject::{BlobObject, CommitObject, GitObject, TreeObject},
-    ObjectType,
 };
-use crate::pack::Pack;
+use crate::gitobject::DeltaObject;
+use crate::pack::{BinaryObject, Pack, parse_object_data};
 use crate::packindex::PackIndex;
 
 pub struct Repository {
@@ -224,7 +226,6 @@ impl Repository {
         }
 
         let sha1 = decode(name)?;
-
         let (pack, offset) = self.repo_path(&Path::new("objects").join("pack"))
             .read_dir()?
             .filter_map(|p| {
@@ -255,16 +256,39 @@ impl Repository {
             .unwrap();
 
         let packfile_name = format!("pack-{}.pack", pack);
-        if let Some(packfile_path) = self.repo_file(
-            &Path::new("objects").join("pack").join(packfile_name), false) {
-            let mut packfile = Pack::new(BufReader::new(File::open(packfile_path)?));
-            packfile.read_object_at(offset)
+        let packfile_path = Path::new("objects").join("pack").join(packfile_name);
+        if let Some(packfile_path) = self.repo_file(&packfile_path, false) {
+            let mut packfile = Pack::new(BufReader::new(File::open(packfile_path)?))?;
+            let (object_type, data) = packfile.read_object_data_at(offset)?;
+            let (object_type, data) = self.unpack_delta(&mut packfile, offset, object_type, data)?;
+            parse_object_data(object_type, data)
         } else {
             Err("Failed to load packfile")?
         }
     }
 
-    pub fn find_object(&self, _: ObjectType, name: &str) -> Result<String, Box<dyn Error>> {
+    fn unpack_delta<T: Read + Seek>(&self, packfile: &mut Pack<T>, offset: u64, object_type: BinaryObject, data: Vec<u8>) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
+        println!("unpacking delta");
+        let data = match object_type {
+            BinaryObject::Blob | BinaryObject::Commit | BinaryObject::Tag | BinaryObject::Tree => {
+                (object_type, data)
+            }
+            BinaryObject::OffsetDelta(delta_offset) => {
+                let (next_object_type, next_data) =
+                    packfile.read_object_data_at(offset - delta_offset)?;
+                let (next_object_type, next_data) =
+                    self.unpack_delta(packfile, offset - delta_offset, next_object_type, next_data)?;
+                (next_object_type, DeltaObject::from(&data)?.rebuild(next_data))
+            }
+            BinaryObject::RefDelta(reference) => {
+                todo!()
+            }
+        };
+        println!("\tunpacked");
+        Ok(data)
+    }
+
+    pub fn find_object(&self, _: CommandObjectType, name: &str) -> Result<String, Box<dyn Error>> {
         Ok(name.to_string())
     }
 
@@ -311,7 +335,7 @@ impl Repository {
     pub fn object_hash(
         &self,
         path: &Path,
-        object_type: ObjectType,
+        object_type: CommandObjectType,
         write: bool,
     ) -> Result<String, Box<dyn Error>> {
         let data = {
@@ -322,7 +346,7 @@ impl Repository {
         };
 
         let obj = match object_type {
-            ObjectType::Blob => GitObject::Blob(BlobObject::from(data)),
+            CommandObjectType::Blob => GitObject::Blob(BlobObject::from(data)),
             _ => todo!(),
         };
 
@@ -340,7 +364,7 @@ impl Repository {
             .ok_or("Packfile does not exist")?;
 
         let reader = BufReader::new(File::open(path)?);
-        Pack::new(reader).read()
+        Pack::new(reader)?.read()
     }
 
     pub fn ls_tree(
@@ -350,7 +374,7 @@ impl Repository {
         path: &Path,
     ) -> Result<(), Box<dyn Error>> {
         println!("finding object {}", reference);
-        let sha1 = self.find_object(ObjectType::Tree, reference)?;
+        let sha1 = self.find_object(CommandObjectType::Tree, reference)?;
         println!("reading object {}", sha1);
         let object = match self.read_object_file(&sha1)? {
             GitObject::Tree(tree) => tree,

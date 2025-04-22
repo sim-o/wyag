@@ -26,14 +26,14 @@ struct Cli {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
-enum ObjectType {
+enum CommandObjectType {
     Blob,
     Commit,
     Tag,
     Tree,
 }
 
-impl Display for ObjectType {
+impl Display for CommandObjectType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&format!("{:?}", self).to_string().to_lowercase())
     }
@@ -51,7 +51,7 @@ enum Commands {
     CatObject {
         /// Specify the type.
         #[arg(value_enum)]
-        object_type: ObjectType,
+        object_type: CommandObjectType,
 
         /// The object to display.
         name: String,
@@ -64,8 +64,8 @@ enum Commands {
     /// Compute object ID and optionally create an object from a file.
     HashObject {
         /// Specify the type.
-        #[arg(short, long, default_value_t = ObjectType::Blob)]
-        _type: ObjectType,
+        #[arg(short, long, default_value_t = CommandObjectType::Blob)]
+        _type: CommandObjectType,
 
         /// Actually write the object into the database.
         #[arg(short, long)]
@@ -140,7 +140,7 @@ fn ls_tree(path: &Path, tree: String, recurse: bool) -> Result<(), Box<dyn Error
     repo.ls_tree(&tree, recurse, Path::new("."))
 }
 
-fn write_object(_type: ObjectType, file: PathBuf, write: bool) -> Result<(), Box<dyn Error>> {
+fn write_object(_type: CommandObjectType, file: PathBuf, write: bool) -> Result<(), Box<dyn Error>> {
     let repo = Repository::find(Path::new("."))?;
     let sha1 = repo.object_hash(&file, _type, write)?;
     println!("{}", sha1);
@@ -149,7 +149,7 @@ fn write_object(_type: ObjectType, file: PathBuf, write: bool) -> Result<(), Box
 
 fn read_object(
     repository: PathBuf,
-    object_type: ObjectType,
+    object_type: CommandObjectType,
     name: String,
 ) -> Result<(), Box<dyn Error>> {
     let repo = Repository::find(&repository)?;

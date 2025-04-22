@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::io;
 use std::io::{BufReader, Error, ErrorKind, Read, Seek, SeekFrom};
 
-use hex::{FromHex, ToHex};
+use hex::ToHex;
 
 pub struct PackIndex<T: Read + Seek> {
     id: String,
@@ -20,7 +20,7 @@ impl<T: Read + Seek> PackIndex<T> {
         self.id.clone()
     }
 
-    pub fn find(&mut self, sha1: &[u8]) -> io::Result<Option<usize>> {
+    pub fn find(&mut self, sha1: &[u8]) -> io::Result<Option<u64>> {
         assert_eq!(sha1.len(), 20);
         self.reader.seek(SeekFrom::Start(0))?;
         {
@@ -56,7 +56,7 @@ impl<T: Read + Seek> PackIndex<T> {
             None => return Ok(None),
         };
 
-        Ok(Some(offsets[index] as usize))
+        Ok(Some(offsets[index] as u64))
     }
 
     fn search_hash(hashes: Vec<Vec<u8>>, fanout: Vec<u32>, sha1: &[u8]) -> Option<usize> {

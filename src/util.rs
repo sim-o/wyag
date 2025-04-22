@@ -22,15 +22,15 @@ pub fn parse_variable_length<T: Read>(reader: &mut BufReader<T>) -> Result<usize
     Ok(expanded)
 }
 
-pub fn parse_offset_delta<T: Read>(reader: &mut BufReader<T>) -> Result<usize, Box<dyn Error>> {
+pub fn parse_offset_delta<T: Read>(reader: &mut BufReader<T>) -> Result<u64, Box<dyn Error>> {
     let mut b = read_byte(reader)?;
-    let mut offset = b as usize & 0x7f;
+    let mut offset = b as u64 & 0x7f;
 
     while b & 0x80 > 0 {
         offset += 1;
         offset <<= 7;
         b = read_byte(reader)?;
-        offset += b as usize & 0x7f;
+        offset += b as u64 & 0x7f;
     }
 
     Ok(offset)
