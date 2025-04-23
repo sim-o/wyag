@@ -1,3 +1,4 @@
+use std::io::{BufReader, ErrorKind, Read};
 use std::{
     cell::RefCell,
     error::Error,
@@ -5,10 +6,10 @@ use std::{
     path::PathBuf,
     str::from_utf8,
 };
-use std::io::{BufReader, ErrorKind, Read};
 
 use bytes::Buf;
 use hex::ToHex;
+use log::debug;
 use ordered_hash_map::OrderedHashMap;
 
 use crate::kvlm::{kvlm_parse, kvlm_serialize};
@@ -140,13 +141,13 @@ pub struct TreeObject {
 
 impl TreeObject {
     pub fn from(data: &[u8]) -> Result<TreeObject, Box<dyn Error>> {
-        println!("reading tree len: {}", data.len());
+        debug!("reading tree len: {}", data.len());
         let mut leaves = Vec::new();
 
         let mut rem = data;
         while !rem.is_empty() {
             let (leaf, len) = TreeLeaf::parse_one(rem)?;
-            println!("treeleef read: {}, len: {len}", leaf.path.to_string_lossy());
+            debug!("treeleef read: {}, len: {len}", leaf.path.to_string_lossy());
             leaves.push(leaf);
             rem = &rem[len..];
         }

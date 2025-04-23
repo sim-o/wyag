@@ -1,5 +1,6 @@
 extern crate sha1;
 
+use std::io::Seek;
 use std::{
     error::Error,
     fs::{create_dir_all, File},
@@ -7,26 +8,25 @@ use std::{
     path::{Path, PathBuf},
     str::from_utf8,
 };
-use std::io::Seek;
 
 use bytes::{Buf, BufMut};
 use configparser::ini::Ini;
 use flate2::bufread::{ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
 use hex::{decode, ToHex};
-
+use log::{debug, trace};
 use BinaryObject::{OffsetDelta, RefDelta};
 
-use crate::{
-    CommandObjectType,
-    gitobject::{BlobObject, GitObject},
-};
 use crate::gitobject::DeltaObject;
-use crate::pack::{BinaryObject, Pack, parse_object_data};
 use crate::pack::BinaryObject::{Blob, Commit, Tag, Tree};
+use crate::pack::{parse_object_data, BinaryObject, Pack};
 use crate::packindex::PackIndex;
 use crate::repository::ObjectLocation::{ObjectFile, PackFile};
 use crate::util::{get_sha1, validate_sha1};
+use crate::{
+    gitobject::{BlobObject, GitObject},
+    CommandObjectType,
+};
 
 pub struct Repository {
     pub worktree: PathBuf,
@@ -39,7 +39,7 @@ impl Repository {
         let gitdir = path.join(".git");
         let config_file = gitdir.join("config");
 
-        println!("constructing repo");
+        debug!("constructing repo");
 
         let conf = if config_file.is_file() {
             let file = File::open(config_file)?;
@@ -66,7 +66,7 @@ impl Repository {
             return Err("config file does not exist".to_string())?;
         }
 
-        println!("constructed");
+        trace!("constructed");
 
         Ok(Self {
             worktree: path.into(),
@@ -137,7 +137,7 @@ impl Repository {
                 }
             }
         } else {
-            println!("Creating worktree: {}", self.worktree.to_string_lossy());
+            debug!("Creating worktree: {}", self.worktree.to_string_lossy());
             create_dir_all(&self.worktree)?;
         }
 
@@ -191,7 +191,7 @@ impl Repository {
                 .position(|&b| b == b'\x00')
                 .ok_or("object corrupt: missing size")?;
 
-        println!("reading size...");
+        trace!("reading size...");
         let size = from_utf8(&raw[type_idx + 1..size_idx])?.parse::<usize>()?;
         if size != raw.len() - size_idx - 1 {
             Err(format!(
@@ -203,7 +203,7 @@ impl Repository {
 
         let object_type = &raw[..type_idx];
         let data = raw[size_idx + 1..].to_vec();
-        println!(
+        debug!(
             "type = '{}' size = {}",
             from_utf8(object_type).unwrap(),
             size
@@ -250,7 +250,7 @@ impl Repository {
                         let path = p.path();
                         if name.starts_with("pack-") && name.ends_with(".idx") && path.is_file() {
                             let id = name[5..name.len() - 4].to_string();
-                            println!("found pack {id}: {name}");
+                            debug!("found pack {id}: {name}");
                             if let Ok(file) = File::open(path) {
                                 return Some(PackIndex::new(id, BufReader::new(file)));
                             }
@@ -262,7 +262,7 @@ impl Repository {
             .flat_map(|mut pf| {
                 let result = pf.find(sha1.as_slice());
                 if let Ok(Some(offset)) = result {
-                    println!("found pack offset {}", offset);
+                    debug!("found pack offset {}", offset);
                     Some((pf.id(), offset))
                 } else {
                     None
@@ -318,7 +318,7 @@ impl Repository {
         object_type: BinaryObject,
         data: Vec<u8>,
     ) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
-        println!("unpacking delta");
+        trace!("unpacking delta");
         let data = match object_type {
             Blob | Commit | Tag | Tree => (object_type, data),
             OffsetDelta(delta_offset) => {
@@ -354,7 +354,7 @@ impl Repository {
                 )
             }
         };
-        println!("\tunpacked");
+        trace!("\tunpacked");
         Ok(data)
     }
 
@@ -363,11 +363,9 @@ impl Repository {
         _: CommandObjectType,
         name: &str,
     ) -> Result<[u8; 20], Box<dyn Error>> {
-        let res = decode(name)?.first_chunk::<20>().copied();
-        match res {
-            None => Err("decoded hex had wrong length")?,
-            Some(res) => Ok(res),
-        }
+        Ok(decode(name)?
+            .try_into()
+            .map_err(|_| "hash has incorrect length")?)
     }
 
     pub fn write_object(&self, obj: &GitObject, write: bool) -> Result<String, Box<dyn Error>> {
@@ -448,15 +446,15 @@ impl Repository {
         recurse: bool,
         path: &Path,
     ) -> Result<(), Box<dyn Error>> {
-        println!("finding object {}", reference);
+        trace!("finding object {}", reference);
         let sha1 = self.find_object(CommandObjectType::Tree, reference)?;
-        println!("reading object {}", sha1.encode_hex::<String>());
+        trace!("reading object {}", sha1.encode_hex::<String>());
         let object = match self.read_object(&sha1)? {
             GitObject::Tree(tree) => tree,
             _ => Err("object not a tree")?,
         };
 
-        println!("iterating leaf {}", path.to_string_lossy());
+        trace!("iterating leaf {}", path.to_string_lossy());
 
         object.for_each_leaf(|item| {
             let _type = match &item.mode[..2] {
@@ -474,7 +472,7 @@ impl Repository {
                 )
                 .expect("Failed to descend tree");
             } else {
-                println!(
+                trace!(
                     "{} {} {} {}",
                     item.mode,
                     _type,

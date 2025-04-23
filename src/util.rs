@@ -3,8 +3,9 @@ use std::io;
 use std::io::{BufReader, Read};
 
 use hex::ToHex;
-use sha1::{Digest, Sha1};
+use log::debug;
 use sha1::digest::Update;
+use sha1::{Digest, Sha1};
 
 use crate::pack::BinaryObject;
 
@@ -53,7 +54,7 @@ pub fn get_sha1(object_type: &BinaryObject, data: &[u8]) -> String {
 }
 
 pub fn validate_sha1(sha1: &[u8; 20], object_type: &BinaryObject, data: &[u8]) {
-    println!("validating {} and len {}", object_type.name(), data.len());
+    debug!("validating {} and len {}", object_type.name(), data.len());
     let result = get_sha1(object_type, data);
     assert_eq!(result, sha1.encode_hex::<String>());
 }

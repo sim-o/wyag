@@ -108,9 +108,9 @@ pub fn kvlm_serialize(map: &OrderedHashMap<String, Vec<Vec<u8>>>) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, ops::Deref, str::from_utf8};
-
+    use log::debug;
     use ordered_hash_map::OrderedHashMap;
+    use std::{collections::HashMap, ops::Deref, str::from_utf8};
 
     use super::{kvlm_parse, kvlm_serialize};
 
@@ -180,7 +180,7 @@ Q52UWybBzpaP9HEd4XnR+HuQ4k2K0ns2KgNImsNvIyFwbpMUyUWLMPimaV1DWUXo
         let map = kvlm_parse(KVLM).unwrap();
         let ser = kvlm_serialize(&map);
         assert_bytes_eq(map.get(""), vec![b"Create first draft".to_vec()], "comment");
-        println!("{}", from_utf8(&ser).unwrap());
+        debug!("{}", from_utf8(&ser).unwrap());
         assert_eq!(readable_map(&map), readable_map(&kvlm_parse(&ser).unwrap()));
     }
 

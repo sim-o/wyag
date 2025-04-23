@@ -1,18 +1,18 @@
 extern crate sha1;
 
+use std::io::{Seek, SeekFrom};
 use std::{
     error::Error,
     io::{BufReader, Read},
 };
-use std::io::{Seek, SeekFrom};
 
 use flate2::bufread::ZlibDecoder;
-
+use log::{debug, error, warn};
 use GitObject::{Tag, Tree};
 
+use crate::gitobject::GitObject::{Blob, Commit, OffsetDelta, RefDelta};
 use crate::gitobject::{BlobObject, CommitObject, GitObject, TagObject, TreeObject};
 use crate::gitobject::{OffsetDeltaObject, RefDeltaObject};
-use crate::gitobject::GitObject::{Blob, Commit, OffsetDelta, RefDelta};
 use crate::util::parse_offset_delta;
 
 pub struct Pack<T: Read + Seek> {
@@ -34,16 +34,16 @@ impl<T: Read + Seek> Pack<T> {
     pub fn read(&mut self) -> Result<Vec<GitObject>, Box<dyn Error>> {
         self.reader.seek(SeekFrom::Start(0))?;
         let entries = self.check_header()?;
-        println!("packfile has {} entries", entries);
+        debug!("packfile has {} entries", entries);
 
         let mut result = Vec::with_capacity(entries);
 
         for n in 0..entries {
-            println!("reading entry {}", n);
+            debug!("reading entry {}", n);
             if let Ok(data) = self.read_object() {
                 result.push(data);
             } else {
-                println!("failed to read entry");
+                warn!("failed to read entry");
             }
         }
 
@@ -95,11 +95,11 @@ fn read_compressed<T: Read>(
     reader: &mut BufReader<T>,
     size: usize,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
-    println!("reading compressed: {size}");
+    debug!("reading compressed: {size}");
     let mut bytes = vec![b'\0'; size];
     let mut z = ZlibDecoder::new(reader);
     z.read_exact(&mut bytes)?;
-    println!("\treading done");
+    debug!("\treading done");
     Ok(bytes)
 }
 
@@ -129,7 +129,7 @@ impl BinaryObject {
 pub fn read_data<T: Read>(
     reader: &mut BufReader<T>,
 ) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
-    println!("reading object");
+    debug!("reading object");
     let mut read = [0; 1];
     reader.read_exact(&mut read)?;
     let _type = (read[0] >> 4) & 0x7;
@@ -156,7 +156,7 @@ pub fn read_data<T: Read>(
         _ => unimplemented!(),
     };
 
-    println!("read object {}, size: {}", object_type.name(), size);
+    debug!("read object {}, size: {}", object_type.name(), size);
     Ok((object_type, read_compressed(reader, size)?))
 }
 

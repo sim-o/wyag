@@ -3,6 +3,7 @@ use std::io;
 use std::io::{BufReader, Error, ErrorKind, Read, Seek, SeekFrom};
 
 use hex::ToHex;
+use log::{debug, error, trace};
 
 pub struct PackIndex<T: Read + Seek> {
     id: String,
@@ -33,18 +34,18 @@ impl<T: Read + Seek> PackIndex<T> {
                 .reduce(|acc, v| acc && v)
                 .unwrap_or(false)
             {
-                println!("header {}", header.encode_hex::<String>());
+                debug!("header {}", header.encode_hex::<String>());
                 return Err(Error::from(ErrorKind::InvalidData));
             }
 
             self.reader.read_exact(&mut header)?;
             let version = u32::from_be_bytes(header);
             if version != 2 {
-                println!("invalid version {}", version);
+                error!("invalid version {}", version);
                 return Err(Error::from(ErrorKind::InvalidData));
             }
         }
-        println!("read header");
+        trace!("read header");
 
         let fanout = self.read_n_u32be(256)?;
 

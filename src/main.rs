@@ -7,7 +7,7 @@ use std::{
 };
 
 use clap::{Parser, Subcommand, ValueEnum};
-
+use log::{error, Level, LevelFilter, Metadata, Record};
 use repository::Repository;
 
 mod gitobject;
@@ -17,12 +17,45 @@ mod packindex;
 mod repository;
 mod util;
 
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+enum LogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Off,
+}
+
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 #[command(propagate_version = true)]
 struct Cli {
+    /// Set the log level.
+    #[arg(short, long, default_value_t = LogLevel::Error)]
+    log_level: LogLevel,
+
     #[command(subcommand)]
     command: Commands,
+}
+
+impl LogLevel {
+    pub fn filter(&self) -> LevelFilter {
+        match self {
+            LogLevel::Trace => LevelFilter::Trace,
+            LogLevel::Debug => LevelFilter::Debug,
+            LogLevel::Info => LevelFilter::Info,
+            LogLevel::Warn => LevelFilter::Warn,
+            LogLevel::Error => LevelFilter::Error,
+            LogLevel::Off => LevelFilter::Off,
+        }
+    }
+}
+
+impl Display for LogLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&format!("{:?}", self).to_string().to_lowercase())
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -103,7 +136,11 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
 
-    let result: Result<_, Box<dyn std::error::Error>> = match cli.command {
+    log::set_logger(&LOGGER)
+        .map(|()| log::set_max_level(cli.log_level.filter()))
+        .expect("failed to set logger");
+
+    let result: Result<_, Box<dyn Error>> = match cli.command {
         Commands::Init { path } => init(path),
         Commands::CatObject {
             object_type,
@@ -123,7 +160,7 @@ fn main() {
     };
 
     if let Err(error) = result {
-        println!("Error: {}", error);
+        error!("Error: {}", error);
         exit(1);
     }
 }
@@ -159,9 +196,23 @@ fn read_object(
     Ok(())
 }
 
-fn init(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn init(path: PathBuf) -> Result<(), Box<dyn Error>> {
     let repo = Repository::new(&path, true)?;
     repo.init()?;
     println!("Created repository at: {}", repo.worktree.to_string_lossy());
     Ok(())
 }
+
+struct SimpleLogger;
+impl log::Log for SimpleLogger {
+    fn enabled(&self, metadata: &Metadata) -> bool {
+        metadata.level() <= Level::Trace
+    }
+    fn log(&self, record: &Record) {
+        if self.enabled(record.metadata()) {
+            println!("{} - {}", record.level(), record.args());
+        }
+    }
+    fn flush(&self) {}
+}
+static LOGGER: SimpleLogger = SimpleLogger;
