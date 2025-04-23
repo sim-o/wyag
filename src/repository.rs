@@ -1,4 +1,3 @@
-extern crate libflate;
 extern crate sha1;
 
 use std::{
@@ -10,18 +9,20 @@ use std::{
 };
 use std::io::Seek;
 
-use bytes::BufMut;
+use bytes::{Buf, BufMut};
 use configparser::ini::Ini;
+use flate2::bufread::{ZlibDecoder, ZlibEncoder};
+use flate2::Compression;
 use hex::{decode, ToHex};
-use libflate::zlib::{Decoder, Encoder};
 use sha1::{Digest, Sha1};
 
 use crate::{
     CommandObjectType,
-    gitobject::{BlobObject, CommitObject, GitObject, TreeObject},
+    gitobject::{BlobObject, GitObject},
 };
 use crate::gitobject::DeltaObject;
 use crate::pack::{BinaryObject, Pack, parse_object_data};
+use crate::pack::BinaryObject::{Blob, Commit, Tag, Tree};
 use crate::packindex::PackIndex;
 
 pub struct Repository {
@@ -159,7 +160,7 @@ impl Repository {
         Ok(())
     }
 
-    pub fn read_object_file(&self, sha: &str) -> Result<GitObject, Box<dyn Error>> {
+    fn read_object_file_data(&self, sha: &str) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
         let path = self.object_file_path(&sha)
             .ok_or(format!("Could not load object {}", sha))?;
         if !path.is_file() {
@@ -167,8 +168,7 @@ impl Repository {
         }
 
         let mut file = File::open(path)?;
-        let mut decoder =
-            Decoder::new(&mut file).map_err(|e| format!("Error decompressing: {}", e))?;
+        let mut decoder = ZlibDecoder::new(BufReader::new(&mut file));
         let mut raw: Vec<u8> = Vec::new();
         decoder.read_to_end(&mut raw)?;
 
@@ -195,24 +195,22 @@ impl Repository {
         }
 
         let object_type = &raw[..type_idx];
-        let data = Vec::from(&raw[size_idx + 1..]);
+        let data = raw[size_idx + 1..].to_vec();
         println!(
             "type = '{}' size = {}",
             from_utf8(object_type).unwrap(),
             size
         );
 
-        let result = match object_type {
-            b"blob" => GitObject::Blob(BlobObject::from(data)),
-            b"commit" => GitObject::Commit(CommitObject::from(&data)?),
-            b"tree" => GitObject::Tree(TreeObject::from(&data)?),
-            _ => todo!(
-                "unhandled type: {}",
-                from_utf8(object_type).unwrap_or("--unknown--")
-            ),
+        let object_type = match object_type {
+            b"blob" => Blob,
+            b"commit" => Commit,
+            b"tree" => Tree,
+            b"tag" => Tag,
+            _ => unimplemented!("unexpected type {}", from_utf8(object_type).unwrap_or("<<invalid utf8>>")),
         };
 
-        Ok(result)
+        Ok((object_type, data))
     }
 
     fn object_file_path(&self, sha: &str) -> Option<PathBuf> {
@@ -221,8 +219,13 @@ impl Repository {
     }
 
     pub fn read_object(&self, name: &str) -> Result<GitObject, Box<dyn Error>> {
+        let (object_type, data) = self.read_object_data(name)?;
+        parse_object_data(object_type, data)
+    }
+
+    fn read_object_data(&self, name: &str) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
         if self.object_file_path(name).is_some() {
-            return self.read_object_file(name);
+            return self.read_object_file_data(name);
         }
 
         let sha1 = decode(name)?;
@@ -261,7 +264,7 @@ impl Repository {
             let mut packfile = Pack::new(BufReader::new(File::open(packfile_path)?))?;
             let (object_type, data) = packfile.read_object_data_at(offset)?;
             let (object_type, data) = self.unpack_delta(&mut packfile, offset, object_type, data)?;
-            parse_object_data(object_type, data)
+            Ok((object_type, data))
         } else {
             Err("Failed to load packfile")?
         }
@@ -319,9 +322,10 @@ impl Repository {
                 .ok_or(format!("could not create object: {}", sha1))?;
 
             let compressed = {
-                let mut encoder = Encoder::new(Vec::new())?;
-                encoder.write_all(&bytes)?;
-                encoder.finish().into_result()?
+                let mut encoder = ZlibEncoder::new(bytes.reader(), Compression::default());
+                let mut compressed = Vec::new();
+                encoder.read_to_end(&mut compressed)?;
+                compressed
             };
 
             let mut object =
@@ -376,7 +380,7 @@ impl Repository {
         println!("finding object {}", reference);
         let sha1 = self.find_object(CommandObjectType::Tree, reference)?;
         println!("reading object {}", sha1);
-        let object = match self.read_object_file(&sha1)? {
+        let object = match self.read_object(&sha1)? {
             GitObject::Tree(tree) => tree,
             _ => Err("object not a tree")?,
         };

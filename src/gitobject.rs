@@ -1,6 +1,6 @@
 use std::{
-    cell::RefCell,
-    collections::HashMap,
+    cell::RefCell
+    ,
     error::Error,
     fmt::{Debug, Display},
     path::PathBuf,
@@ -10,6 +10,7 @@ use std::io::{BufReader, ErrorKind, Read};
 
 use bytes::Buf;
 use hex::ToHex;
+use ordered_hash_map::OrderedHashMap;
 
 use crate::kvlm::{kvlm_parse, kvlm_serialize};
 use crate::util::{parse_variable_length, read_byte};
@@ -19,6 +20,7 @@ pub enum GitObject {
     Blob(BlobObject),
     Commit(CommitObject),
     Tree(TreeObject),
+    Tag(TagObject),
     OffsetDelta(OffsetDeltaObject),
     RefDelta(RefDeltaObject),
 }
@@ -54,6 +56,7 @@ impl GitObject {
         match &self {
             GitObject::Blob(blob) => blob.serialize(),
             GitObject::Commit(commit) => commit.serialize(),
+            GitObject::Tag(tag) => tag.serialize(),
             GitObject::Tree(tree) => tree.serialize(),
             GitObject::OffsetDelta(delta) => format!("OffsetDelta({:?})", delta).into_bytes(),
             GitObject::RefDelta(delta) => format!("RefDelta({:?})", delta).into_bytes(),
@@ -84,12 +87,28 @@ impl Display for BlobObject {
 
 #[derive(Debug)]
 pub struct CommitObject {
-    kvlm: HashMap<String, Vec<Vec<u8>>>,
+    kvlm: OrderedHashMap<String, Vec<Vec<u8>>>,
 }
 
 impl CommitObject {
-    pub fn from(data: &[u8]) -> Result<CommitObject, Box<dyn Error>> {
-        Ok(CommitObject {
+    pub fn from(data: &[u8]) -> Result<Self, Box<dyn Error>> {
+        Ok(Self {
+            kvlm: kvlm_parse(data)?,
+        })
+    }
+    pub fn serialize(&self) -> Vec<u8> {
+        kvlm_serialize(&self.kvlm)
+    }
+}
+
+#[derive(Debug)]
+pub struct TagObject {
+    kvlm: OrderedHashMap<String, Vec<Vec<u8>>>,
+}
+
+impl TagObject {
+    pub fn from(data: &[u8]) -> Result<Self, Box<dyn Error>> {
+        Ok(Self {
             kvlm: kvlm_parse(data)?,
         })
     }

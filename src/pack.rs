@@ -1,4 +1,3 @@
-extern crate libflate;
 extern crate sha1;
 
 use std::{error::Error, io::{BufReader, Read}};
@@ -6,9 +5,9 @@ use std::io::{Seek, SeekFrom};
 
 use flate2::bufread::ZlibDecoder;
 
-use GitObject::Tree;
+use GitObject::{Tag, Tree};
 
-use crate::gitobject::{BlobObject, CommitObject, GitObject, TreeObject};
+use crate::gitobject::{BlobObject, CommitObject, GitObject, TagObject, TreeObject};
 use crate::gitobject::{OffsetDeltaObject, RefDeltaObject};
 use crate::gitobject::GitObject::{Blob, Commit, OffsetDelta, RefDelta};
 use crate::util::parse_offset_delta;
@@ -145,7 +144,7 @@ pub fn parse_object_data(object_type: BinaryObject, data: Vec<u8>) -> Result<Git
         BinaryObject::Commit => Commit(CommitObject::from(&data)?),
         BinaryObject::Tree => Tree(TreeObject::from(&data)?),
         BinaryObject::Blob => Blob(BlobObject::from(data)),
-        BinaryObject::Tag => todo!("Tag object not implemented"),
+        BinaryObject::Tag => Tag(TagObject::from(&data)?),
         BinaryObject::OffsetDelta(offset) => OffsetDelta(OffsetDeltaObject::new(offset, &data)?),
         BinaryObject::RefDelta(sha1) => RefDelta(RefDeltaObject::new(sha1, &data)?),
     };

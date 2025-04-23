@@ -1,14 +1,16 @@
-use std::{collections::HashMap, error::Error, str::from_utf8};
+use std::{error::Error, str::from_utf8};
 
-pub fn kvlm_parse(raw: &[u8]) -> Result<HashMap<String, Vec<Vec<u8>>>, Box<dyn Error>> {
-    let mut map = HashMap::new();
+use ordered_hash_map::OrderedHashMap;
+
+pub fn kvlm_parse(raw: &[u8]) -> Result<OrderedHashMap<String, Vec<Vec<u8>>>, Box<dyn Error>> {
+    let mut map = OrderedHashMap::new();
     kvlm_parse_rec(raw, &mut map)?;
     Ok(map)
 }
 
 fn kvlm_parse_rec(
     raw: &[u8],
-    map: &mut HashMap<String, Vec<Vec<u8>>>,
+    map: &mut OrderedHashMap<String, Vec<Vec<u8>>>,
 ) -> Result<(), Box<dyn Error>> {
     if raw.is_empty() {
         return Ok(());
@@ -38,9 +40,12 @@ fn kvlm_parse_rec(
         }
     }
 
-    map.entry(from_utf8(key)?.to_string())
-        .or_default()
-        .push(kvlm_clean_value(raw[spc + 1..end].to_vec()));
+    let key = from_utf8(key)?.to_string();
+    if let Some(v) = map.get_mut(&key) {
+        v.push(kvlm_clean_value(raw[spc + 1..end].to_vec()));
+    } else {
+        map.insert(key, vec![kvlm_clean_value(raw[spc + 1..end].to_vec())]);
+    }
 
     kvlm_parse_rec(&raw[end + 1..], map)
 }
@@ -65,7 +70,7 @@ fn kvlm_clean_value(mut vec: Vec<u8>) -> Vec<u8> {
     vec
 }
 
-pub fn kvlm_serialize(map: &HashMap<String, Vec<Vec<u8>>>) -> Vec<u8> {
+pub fn kvlm_serialize(map: &OrderedHashMap<String, Vec<Vec<u8>>>) -> Vec<u8> {
     let mut rest = None;
     let mut v = map
         .iter()
@@ -104,6 +109,8 @@ pub fn kvlm_serialize(map: &HashMap<String, Vec<Vec<u8>>>) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use std::{collections::HashMap, ops::Deref, str::from_utf8};
+
+    use ordered_hash_map::OrderedHashMap;
 
     use super::{kvlm_parse, kvlm_serialize};
 
@@ -177,7 +184,7 @@ Q52UWybBzpaP9HEd4XnR+HuQ4k2K0ns2KgNImsNvIyFwbpMUyUWLMPimaV1DWUXo
         assert_eq!(readable_map(&map), readable_map(&kvlm_parse(&ser).unwrap()));
     }
 
-    fn readable_map(map: &HashMap<String, Vec<Vec<u8>>>) -> HashMap<String, Vec<String>> {
+    fn readable_map(map: &OrderedHashMap<String, Vec<Vec<u8>>>) -> HashMap<String, Vec<String>> {
         map.clone()
             .into_iter()
             .map(|(k, v)| {
