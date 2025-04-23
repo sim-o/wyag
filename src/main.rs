@@ -10,11 +10,11 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use repository::Repository;
 
-mod repository;
 mod gitobject;
 mod kvlm;
 mod pack;
 mod packindex;
+mod repository;
 mod util;
 
 #[derive(Parser)]
@@ -110,7 +110,7 @@ fn main() {
             name,
             repository,
         } => read_object(repository.unwrap_or(PathBuf::from(".")), object_type, name),
-        Commands::HashObject { _type, write, file } => write_object(_type, file, write),
+        Commands::HashObject { _type, write, file } => hash_object(_type, file, write),
         Commands::LsTree {
             recurse,
             tree,
@@ -140,11 +140,7 @@ fn ls_tree(path: &Path, tree: String, recurse: bool) -> Result<(), Box<dyn Error
     repo.ls_tree(&tree, recurse, Path::new("."))
 }
 
-fn write_object(
-    _type: CommandObjectType,
-    file: PathBuf,
-    write: bool,
-) -> Result<(), Box<dyn Error>> {
+fn hash_object(_type: CommandObjectType, file: PathBuf, write: bool) -> Result<(), Box<dyn Error>> {
     let repo = Repository::find(Path::new("."))?;
     let sha1 = repo.object_hash(&file, _type, write)?;
     println!("{}", sha1);

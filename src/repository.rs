@@ -14,7 +14,6 @@ use configparser::ini::Ini;
 use flate2::bufread::{ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
 use hex::{decode, ToHex};
-use sha1::Digest;
 
 use BinaryObject::{OffsetDelta, RefDelta};
 
@@ -26,6 +25,7 @@ use crate::gitobject::DeltaObject;
 use crate::pack::{BinaryObject, Pack, parse_object_data};
 use crate::pack::BinaryObject::{Blob, Commit, Tag, Tree};
 use crate::packindex::PackIndex;
+use crate::repository::ObjectLocation::{ObjectFile, PackFile};
 use crate::util::{get_sha1, validate_sha1};
 
 pub struct Repository {
@@ -165,7 +165,7 @@ impl Repository {
 
     fn read_object_file_data(&self, sha1: &str) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
         let path = self
-            .object_file_path(&sha1)
+            .object_file_path(sha1)
             .ok_or(format!("Could not load object {}", sha1))?;
         if !path.is_file() {
             Err(format!("file {} does not exist", path.to_string_lossy()))?;
@@ -231,15 +231,16 @@ impl Repository {
         parse_object_data(object_type, data)
     }
 
-    fn read_object_data(&self, name: &str) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
-        if self.objecjjjt_file_path(name).is_some() {
-            return self.read_object_file_data(name);
+    fn find_object_location(&self, name: &str) -> Option<ObjectLocation> {
+        if self.object_file_path(name).is_some() {
+            return Some(ObjectFile);
         }
 
-        let sha1 = decode(name)?;
-        let (pack, offset) = self
+        let sha1 = decode(name).ok()?;
+        let found = self
             .repo_path(&Path::new("objects").join("pack"))
-            .read_dir()?
+            .read_dir()
+            .ok()?
             .filter_map(|p| {
                 if let Ok(p) = p {
                     if let Some(name) = p.file_name().to_str() {
@@ -264,22 +265,46 @@ impl Repository {
                     None
                 }
             })
-            .next()
-            .unwrap();
+            .next();
 
-        println!("found in pack {pack} at {offset}");
+        if let Some((pack, offset)) = found {
+            return Some(PackFile(pack, offset));
+        }
 
-        let packfile_name = format!("pack-{}.pack", pack);
+        None
+    }
+
+    fn read_object_data(&self, name: &str) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
+        let location = self
+            .find_object_location(name)
+            .ok_or("Failed to find object")?;
+        self.read_object_from_location(name, &location)
+    }
+
+    fn open_pack(&self, sha1: &str) -> Result<Pack<File>, Box<dyn Error>> {
+        let packfile_name = format!("pack-{}.pack", sha1);
         let packfile_path = Path::new("objects").join("pack").join(packfile_name);
-        if let Some(packfile_path) = self.repo_file(&packfile_path, false) {
-            let mut packfile = Pack::new(BufReader::new(File::open(packfile_path)?))?;
-            let (object_type, data) = packfile.read_object_data_at(offset)?;
-            let (object_type, data) =
-                self.unpack_delta(&mut packfile, offset, object_type, data)?;
-            validate_sha1(&name, &object_type, &data);
-            Ok((object_type, data))
-        } else {
-            Err("Failed to load packfile")?
+        match self.repo_file(&packfile_path, false) {
+            Some(packfile_path) => Ok(Pack::new(BufReader::new(File::open(packfile_path)?))?),
+            None => Err("Failed to load packfile")?,
+        }
+    }
+
+    fn read_object_from_location(
+        &self,
+        name: &str,
+        location: &ObjectLocation,
+    ) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
+        match location {
+            ObjectFile => self.read_object_file_data(name),
+            PackFile(pack, offset) => {
+                let mut packfile = self.open_pack(pack)?;
+                let (object_type, data) = packfile.read_object_data_at(*offset)?;
+                let (object_type, data) =
+                    self.unpack_delta(&mut packfile, *offset, object_type, data)?;
+                validate_sha1(name, &object_type, &data);
+                Ok((object_type, data))
+            }
         }
     }
 
@@ -308,10 +333,19 @@ impl Repository {
                 )
             }
             RefDelta(reference) => {
+                let hex_reference = reference.encode_hex::<String>();
+                let location = self
+                    .find_object_location(&hex_reference)
+                    .ok_or("reference not found")?;
                 let (next_object_type, next_data) =
-                    self.read_object_data(reference.encode_hex())?;
-                let (next_object_type, next_data) =
-                    self.unpack_delta(packfile, todo!(), next_object_type, next_data)?;
+                    self.read_object_from_location(&hex_reference, &location)?;
+                let (next_object_type, next_data) = match location {
+                    ObjectFile => self.unpack_delta(packfile, 0, next_object_type, next_data)?,
+                    PackFile(pack, offset) => {
+                        let mut next_pack = self.open_pack(&pack)?;
+                        self.unpack_delta(&mut next_pack, offset, next_object_type, next_data)?
+                    }
+                };
                 (
                     next_object_type,
                     DeltaObject::from(&data)?.rebuild(next_data),
@@ -450,4 +484,10 @@ fn default_config() -> Ini {
     ini.setstr("core", "filemode", Some("false"));
     ini.setstr("core", "bare", Some("false"));
     ini
+}
+
+#[derive(PartialEq)]
+enum ObjectLocation {
+    ObjectFile,
+    PackFile(String, u64),
 }
