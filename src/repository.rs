@@ -17,16 +17,14 @@ use hex::{decode, ToHex};
 use log::{debug, trace};
 use BinaryObject::{OffsetDelta, RefDelta};
 
+use crate::cli::CommandObjectType;
 use crate::gitobject::DeltaObject;
+use crate::gitobject::{BlobObject, GitObject};
 use crate::pack::BinaryObject::{Blob, Commit, Tag, Tree};
 use crate::pack::{parse_object_data, BinaryObject, Pack};
 use crate::packindex::PackIndex;
 use crate::repository::ObjectLocation::{ObjectFile, PackFile};
 use crate::util::{get_sha1, validate_sha1};
-use crate::{
-    gitobject::{BlobObject, GitObject},
-    CommandObjectType,
-};
 
 pub struct Repository {
     pub worktree: PathBuf,

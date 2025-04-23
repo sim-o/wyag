@@ -1,137 +1,26 @@
 use std::{
     error::Error,
-    fmt::Display,
     io::Write,
     path::{Path, PathBuf},
     process::exit,
 };
 
-use clap::{Parser, Subcommand, ValueEnum};
-use log::{error, Level, LevelFilter, Metadata, Record};
+use clap::Parser;
+use cli::{Cli, CommandObjectType, Commands};
+use log::error;
+use logger::SimpleLogger;
 use repository::Repository;
 
+mod cli;
 mod gitobject;
 mod kvlm;
+mod logger;
 mod pack;
 mod packindex;
 mod repository;
 mod util;
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
-enum LogLevel {
-    Trace,
-    Debug,
-    Info,
-    Warn,
-    Error,
-    Off,
-}
-
-#[derive(Parser)]
-#[command(version, about, long_about = None)]
-#[command(propagate_version = true)]
-struct Cli {
-    /// Set the log level.
-    #[arg(short, long, default_value_t = LogLevel::Error)]
-    log_level: LogLevel,
-
-    #[command(subcommand)]
-    command: Commands,
-}
-
-impl LogLevel {
-    pub fn filter(&self) -> LevelFilter {
-        match self {
-            LogLevel::Trace => LevelFilter::Trace,
-            LogLevel::Debug => LevelFilter::Debug,
-            LogLevel::Info => LevelFilter::Info,
-            LogLevel::Warn => LevelFilter::Warn,
-            LogLevel::Error => LevelFilter::Error,
-            LogLevel::Off => LevelFilter::Off,
-        }
-    }
-}
-
-impl Display for LogLevel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&format!("{:?}", self).to_string().to_lowercase())
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
-enum CommandObjectType {
-    Blob,
-    Commit,
-    Tag,
-    Tree,
-}
-
-impl Display for CommandObjectType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&format!("{:?}", self).to_string().to_lowercase())
-    }
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Initialise a new empty repository.
-    Init {
-        /// Where to create the repository.
-        path: PathBuf,
-    },
-
-    /// Provide content of repository objects.
-    CatObject {
-        /// Specify the type.
-        #[arg(value_enum)]
-        object_type: CommandObjectType,
-
-        /// The object to display.
-        name: String,
-
-        /// Path to repository.
-        #[arg(long)]
-        repository: Option<PathBuf>,
-    },
-
-    /// Compute object ID and optionally create an object from a file.
-    HashObject {
-        /// Specify the type.
-        #[arg(short, long, default_value_t = CommandObjectType::Blob)]
-        _type: CommandObjectType,
-
-        /// Actually write the object into the database.
-        #[arg(short, long)]
-        write: bool,
-
-        /// Read object from <FILE>.
-        file: PathBuf,
-    },
-
-    /// Pretty-print a tree object.
-    LsTree {
-        /// Recurse into sub-trees.
-        #[arg(short, long)]
-        recurse: bool,
-
-        /// Path to repository.
-        #[arg(long)]
-        repository: Option<PathBuf>,
-
-        /// A tree-ish object.
-        tree: String,
-    },
-
-    /// Describe a pack file.
-    LsPack {
-        /// Path to repository.
-        #[arg(long)]
-        repository: Option<PathBuf>,
-
-        /// A packfile sha.
-        packfile: String,
-    },
-}
+static LOGGER: SimpleLogger = SimpleLogger;
 
 fn main() {
     let cli = Cli::parse();
@@ -202,17 +91,3 @@ fn init(path: PathBuf) -> Result<(), Box<dyn Error>> {
     println!("Created repository at: {}", repo.worktree.to_string_lossy());
     Ok(())
 }
-
-struct SimpleLogger;
-impl log::Log for SimpleLogger {
-    fn enabled(&self, metadata: &Metadata) -> bool {
-        metadata.level() <= Level::Trace
-    }
-    fn log(&self, record: &Record) {
-        if self.enabled(record.metadata()) {
-            println!("{} - {}", record.level(), record.args());
-        }
-    }
-    fn flush(&self) {}
-}
-static LOGGER: SimpleLogger = SimpleLogger;

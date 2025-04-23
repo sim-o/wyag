@@ -49,7 +49,8 @@ impl GitObject {
             GitObject::Blob(_) => b"blob",
             GitObject::Commit(_) => b"commit",
             GitObject::Tree(_) => b"tree",
-            _ => todo!(),
+            GitObject::Tag(_) => b"tag",
+            _ => unimplemented!(),
         }
     }
 

@@ -7,7 +7,7 @@ use std::{
 };
 
 use flate2::bufread::ZlibDecoder;
-use log::{debug, error, warn};
+use log::{debug, warn};
 use GitObject::{Tag, Tree};
 
 use crate::gitobject::GitObject::{Blob, Commit, OffsetDelta, RefDelta};
