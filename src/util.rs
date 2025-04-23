@@ -52,8 +52,8 @@ pub fn get_sha1(object_type: &BinaryObject, data: &[u8]) -> String {
     hasher.finalize().encode_hex()
 }
 
-pub fn validate_sha1(sha1: &str, object_type: &BinaryObject, data: &[u8]) {
+pub fn validate_sha1(sha1: &[u8; 20], object_type: &BinaryObject, data: &[u8]) {
     println!("validating {} and len {}", object_type.name(), data.len());
     let result = get_sha1(object_type, data);
-    assert_eq!(&result, sha1);
+    assert_eq!(result, sha1.encode_hex::<String>());
 }

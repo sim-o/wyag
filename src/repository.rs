@@ -163,10 +163,13 @@ impl Repository {
         Ok(())
     }
 
-    fn read_object_file_data(&self, sha1: &str) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
+    fn read_object_file_data(
+        &self,
+        sha1: &[u8; 20],
+    ) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
         let path = self
             .object_file_path(sha1)
-            .ok_or(format!("Could not load object {}", sha1))?;
+            .ok_or_else(|| format!("Could not load object {}", sha1.encode_hex::<String>()))?;
         if !path.is_file() {
             Err(format!("file {} does not exist", path.to_string_lossy()))?;
         }
@@ -221,22 +224,22 @@ impl Repository {
         Ok((object_type, data))
     }
 
-    fn object_file_path(&self, sha: &str) -> Option<PathBuf> {
+    fn object_file_path(&self, sha1: &[u8; 20]) -> Option<PathBuf> {
+        let sha: String = sha1.encode_hex();
         let path = Path::new("objects").join(&sha[..2]).join(&sha[2..]);
         self.repo_file(&path, false)
     }
 
-    pub fn read_object(&self, name: &str) -> Result<GitObject, Box<dyn Error>> {
-        let (object_type, data) = self.read_object_data(name)?;
+    pub fn read_object(&self, sha1: &[u8; 20]) -> Result<GitObject, Box<dyn Error>> {
+        let (object_type, data) = self.read_object_data(sha1)?;
         parse_object_data(object_type, data)
     }
 
-    fn find_object_location(&self, name: &str) -> Option<ObjectLocation> {
-        if self.object_file_path(name).is_some() {
+    fn find_object_location(&self, sha1: &[u8; 20]) -> Option<ObjectLocation> {
+        if self.object_file_path(sha1).is_some() {
             return Some(ObjectFile);
         }
 
-        let sha1 = decode(name).ok()?;
         let found = self
             .repo_path(&Path::new("objects").join("pack"))
             .read_dir()
@@ -274,11 +277,11 @@ impl Repository {
         None
     }
 
-    fn read_object_data(&self, name: &str) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
+    fn read_object_data(&self, sha1: &[u8; 20]) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
         let location = self
-            .find_object_location(name)
+            .find_object_location(sha1)
             .ok_or("Failed to find object")?;
-        self.read_object_from_location(name, &location)
+        self.read_object_from_location(sha1, &location)
     }
 
     fn open_pack(&self, sha1: &str) -> Result<Pack<File>, Box<dyn Error>> {
@@ -292,17 +295,17 @@ impl Repository {
 
     fn read_object_from_location(
         &self,
-        name: &str,
+        sha1: &[u8; 20],
         location: &ObjectLocation,
     ) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
         match location {
-            ObjectFile => self.read_object_file_data(name),
+            ObjectFile => self.read_object_file_data(sha1),
             PackFile(pack, offset) => {
                 let mut packfile = self.open_pack(pack)?;
                 let (object_type, data) = packfile.read_object_data_at(*offset)?;
                 let (object_type, data) =
                     self.unpack_delta(&mut packfile, *offset, object_type, data)?;
-                validate_sha1(name, &object_type, &data);
+                validate_sha1(sha1, &object_type, &data);
                 Ok((object_type, data))
             }
         }
@@ -333,12 +336,11 @@ impl Repository {
                 )
             }
             RefDelta(reference) => {
-                let hex_reference = reference.encode_hex::<String>();
                 let location = self
-                    .find_object_location(&hex_reference)
+                    .find_object_location(&reference)
                     .ok_or("reference not found")?;
                 let (next_object_type, next_data) =
-                    self.read_object_from_location(&hex_reference, &location)?;
+                    self.read_object_from_location(&reference, &location)?;
                 let (next_object_type, next_data) = match location {
                     ObjectFile => self.unpack_delta(packfile, 0, next_object_type, next_data)?,
                     PackFile(pack, offset) => {
@@ -356,8 +358,16 @@ impl Repository {
         Ok(data)
     }
 
-    pub fn find_object(&self, _: CommandObjectType, name: &str) -> Result<String, Box<dyn Error>> {
-        Ok(name.to_string())
+    pub fn find_object(
+        &self,
+        _: CommandObjectType,
+        name: &str,
+    ) -> Result<[u8; 20], Box<dyn Error>> {
+        let res = decode(name)?.first_chunk::<20>().copied();
+        match res {
+            None => Err("decoded hex had wrong length")?,
+            Some(res) => Ok(res),
+        }
     }
 
     pub fn write_object(&self, obj: &GitObject, write: bool) -> Result<String, Box<dyn Error>> {
@@ -440,7 +450,7 @@ impl Repository {
     ) -> Result<(), Box<dyn Error>> {
         println!("finding object {}", reference);
         let sha1 = self.find_object(CommandObjectType::Tree, reference)?;
-        println!("reading object {}", sha1);
+        println!("reading object {}", sha1.encode_hex::<String>());
         let object = match self.read_object(&sha1)? {
             GitObject::Tree(tree) => tree,
             _ => Err("object not a tree")?,
