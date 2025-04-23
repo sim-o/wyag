@@ -14,7 +14,7 @@ use configparser::ini::Ini;
 use flate2::bufread::{ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
 use hex::{decode, ToHex};
-use sha1::{Digest, Sha1};
+use sha1::Digest;
 
 use crate::{
     CommandObjectType,
@@ -24,6 +24,7 @@ use crate::gitobject::DeltaObject;
 use crate::pack::{BinaryObject, Pack, parse_object_data};
 use crate::pack::BinaryObject::{Blob, Commit, Tag, Tree};
 use crate::packindex::PackIndex;
+use crate::util::{get_sha1, validate_sha1};
 
 pub struct Repository {
     pub worktree: PathBuf,
@@ -160,9 +161,9 @@ impl Repository {
         Ok(())
     }
 
-    fn read_object_file_data(&self, sha: &str) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
-        let path = self.object_file_path(&sha)
-            .ok_or(format!("Could not load object {}", sha))?;
+    fn read_object_file_data(&self, sha1: &str) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
+        let path = self.object_file_path(&sha1)
+            .ok_or(format!("Could not load object {}", sha1))?;
         if !path.is_file() {
             Err(format!("file {} does not exist", path.to_string_lossy()))?;
         }
@@ -210,6 +211,7 @@ impl Repository {
             _ => unimplemented!("unexpected type {}", from_utf8(object_type).unwrap_or("<<invalid utf8>>")),
         };
 
+        validate_sha1(sha1, &object_type, &data);
         Ok((object_type, data))
     }
 
@@ -258,12 +260,15 @@ impl Repository {
             .next()
             .unwrap();
 
+        println!("found in pack {pack} at {offset}");
+
         let packfile_name = format!("pack-{}.pack", pack);
         let packfile_path = Path::new("objects").join("pack").join(packfile_name);
         if let Some(packfile_path) = self.repo_file(&packfile_path, false) {
             let mut packfile = Pack::new(BufReader::new(File::open(packfile_path)?))?;
             let (object_type, data) = packfile.read_object_data_at(offset)?;
             let (object_type, data) = self.unpack_delta(&mut packfile, offset, object_type, data)?;
+            validate_sha1(&name, &object_type, &data);
             Ok((object_type, data))
         } else {
             Err("Failed to load packfile")?
@@ -307,11 +312,7 @@ impl Repository {
             writer.into_inner()
         };
 
-        let sha1: String = {
-            let mut hasher = Sha1::new();
-            hasher.update(&bytes);
-            hasher.finalize().encode_hex()
-        };
+        let sha1 = get_sha1(&obj.to_binary_object(), &bytes);
 
         if write {
             let file = self

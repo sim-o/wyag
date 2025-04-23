@@ -65,13 +65,10 @@ impl<T: Read + Seek> PackIndex<T> {
         let mut right = fanout[sha1[0] as usize] as usize;
         while left <= right {
             let i = (right - left) / 2 + left;
-            let cmp = hashes[i].as_slice().cmp(sha1);
-            if cmp == Ordering::Less {
-                left = i + 1;
-            } else if cmp == Ordering::Greater {
-                right = i - 1;
-            } else {
-                return Some(left);
+            match hashes[i].as_slice().cmp(sha1) {
+                Ordering::Less => left = i + 1,
+                Ordering::Greater => right = i - 1,
+                Ordering::Equal => return Some(i),
             }
         }
         return None;

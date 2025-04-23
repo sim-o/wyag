@@ -103,6 +103,19 @@ pub enum BinaryObject {
     RefDelta([u8; 20]),
 }
 
+impl BinaryObject {
+    pub fn name(&self) -> String {
+        match self {
+            BinaryObject::Blob => "blob",
+            BinaryObject::Commit => "commit",
+            BinaryObject::Tag => "tag",
+            BinaryObject::Tree => "tree",
+            BinaryObject::OffsetDelta(_) => "offsetdelta",
+            BinaryObject::RefDelta(_) => "refdelta",
+        }.to_string()
+    }
+}
+
 pub fn read_data<T: Read>(reader: &mut BufReader<T>) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
     println!("reading object");
     let mut read = [0; 1];
@@ -131,6 +144,7 @@ pub fn read_data<T: Read>(reader: &mut BufReader<T>) -> Result<(BinaryObject, Ve
         _ => unimplemented!()
     };
 
+    println!("read object {}, size: {}", object_type.name(), size);
     Ok((object_type, read_compressed(reader, size)?))
 }
 

@@ -13,6 +13,7 @@ use hex::ToHex;
 use ordered_hash_map::OrderedHashMap;
 
 use crate::kvlm::{kvlm_parse, kvlm_serialize};
+use crate::pack::BinaryObject;
 use crate::util::{parse_variable_length, read_byte};
 
 #[derive(Debug)]
@@ -49,6 +50,17 @@ impl GitObject {
             GitObject::Commit(_) => b"commit",
             GitObject::Tree(_) => b"tree",
             _ => todo!(),
+        }
+    }
+
+    pub fn to_binary_object(&self) -> BinaryObject {
+        match self {
+            GitObject::Blob(_) => BinaryObject::Blob,
+            GitObject::Commit(_) => BinaryObject::Commit,
+            GitObject::Tree(_) => BinaryObject::Tree,
+            GitObject::Tag(_) => BinaryObject::Tag,
+            GitObject::OffsetDelta(OffsetDeltaObject{ offset, delta: _ }) => BinaryObject::OffsetDelta(*offset),
+            GitObject::RefDelta(RefDeltaObject{ reference, delta: _ }) => BinaryObject::RefDelta(*reference),
         }
     }
 
@@ -124,11 +136,13 @@ pub struct TreeObject {
 
 impl TreeObject {
     pub fn from(data: &[u8]) -> Result<TreeObject, Box<dyn Error>> {
+        println!("reading tree len: {}", data.len());
         let mut leaves = Vec::new();
 
         let mut rem = data;
         while !rem.is_empty() {
             let (leaf, len) = TreeLeaf::parse_one(rem)?;
+            println!("treeleef read: {}, len: {len}", leaf.path.to_string_lossy());
             leaves.push(leaf);
             rem = &rem[len..];
         }

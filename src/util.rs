@@ -2,6 +2,12 @@ use std::error::Error;
 use std::io;
 use std::io::{BufReader, Read};
 
+use hex::ToHex;
+use sha1::{Digest, Sha1};
+use sha1::digest::Update;
+
+use crate::pack::BinaryObject;
+
 pub fn read_byte<T: Read>(reader: &mut BufReader<T>) -> io::Result<u8> {
     let mut buf = [0; 1];
     reader.read_exact(&mut buf)?;
@@ -34,4 +40,20 @@ pub fn parse_offset_delta<T: Read>(reader: &mut BufReader<T>) -> Result<u64, Box
     }
 
     Ok(offset)
+}
+
+pub fn get_sha1(object_type: &BinaryObject, data: &[u8]) -> String {
+    let mut hasher = Sha1::new();
+    Update::update(&mut hasher, object_type.name().as_bytes());
+    Update::update(&mut hasher, b" ");
+    Update::update(&mut hasher, data.len().to_string().as_bytes());
+    Update::update(&mut hasher, b"\0");
+    Update::update(&mut hasher, &data);
+    hasher.finalize().encode_hex()
+}
+
+pub fn validate_sha1(sha1: &str, object_type: &BinaryObject, data: &[u8]) {
+    println!("validating {} and len {}", object_type.name(), data.len());
+    let result = get_sha1(object_type, data);
+    assert_eq!(&result, sha1);
 }
