@@ -16,6 +16,8 @@ use flate2::Compression;
 use hex::{decode, ToHex};
 use sha1::Digest;
 
+use BinaryObject::{OffsetDelta, RefDelta};
+
 use crate::{
     CommandObjectType,
     gitobject::{BlobObject, GitObject},
@@ -162,7 +164,8 @@ impl Repository {
     }
 
     fn read_object_file_data(&self, sha1: &str) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
-        let path = self.object_file_path(&sha1)
+        let path = self
+            .object_file_path(&sha1)
             .ok_or(format!("Could not load object {}", sha1))?;
         if !path.is_file() {
             Err(format!("file {} does not exist", path.to_string_lossy()))?;
@@ -180,10 +183,10 @@ impl Repository {
 
         let size_idx = type_idx
             + raw
-            .iter()
-            .skip(type_idx)
-            .position(|&b| b == b'\x00')
-            .ok_or("object corrupt: missing size")?;
+                .iter()
+                .skip(type_idx)
+                .position(|&b| b == b'\x00')
+                .ok_or("object corrupt: missing size")?;
 
         println!("reading size...");
         let size = from_utf8(&raw[type_idx + 1..size_idx])?.parse::<usize>()?;
@@ -208,7 +211,10 @@ impl Repository {
             b"commit" => Commit,
             b"tree" => Tree,
             b"tag" => Tag,
-            _ => unimplemented!("unexpected type {}", from_utf8(object_type).unwrap_or("<<invalid utf8>>")),
+            _ => unimplemented!(
+                "unexpected type {}",
+                from_utf8(object_type).unwrap_or("<<invalid utf8>>")
+            ),
         };
 
         validate_sha1(sha1, &object_type, &data);
@@ -226,19 +232,20 @@ impl Repository {
     }
 
     fn read_object_data(&self, name: &str) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
-        if self.object_file_path(name).is_some() {
+        if self.objecjjjt_file_path(name).is_some() {
             return self.read_object_file_data(name);
         }
 
         let sha1 = decode(name)?;
-        let (pack, offset) = self.repo_path(&Path::new("objects").join("pack"))
+        let (pack, offset) = self
+            .repo_path(&Path::new("objects").join("pack"))
             .read_dir()?
             .filter_map(|p| {
                 if let Ok(p) = p {
                     if let Some(name) = p.file_name().to_str() {
                         let path = p.path();
                         if name.starts_with("pack-") && name.ends_with(".idx") && path.is_file() {
-                            let id = name[5..name.len()-4].to_string();
+                            let id = name[5..name.len() - 4].to_string();
                             println!("found pack {id}: {name}");
                             if let Ok(file) = File::open(path) {
                                 return Some(PackIndex::new(id, BufReader::new(file)));
@@ -267,7 +274,8 @@ impl Repository {
         if let Some(packfile_path) = self.repo_file(&packfile_path, false) {
             let mut packfile = Pack::new(BufReader::new(File::open(packfile_path)?))?;
             let (object_type, data) = packfile.read_object_data_at(offset)?;
-            let (object_type, data) = self.unpack_delta(&mut packfile, offset, object_type, data)?;
+            let (object_type, data) =
+                self.unpack_delta(&mut packfile, offset, object_type, data)?;
             validate_sha1(&name, &object_type, &data);
             Ok((object_type, data))
         } else {
@@ -275,21 +283,39 @@ impl Repository {
         }
     }
 
-    fn unpack_delta<T: Read + Seek>(&self, packfile: &mut Pack<T>, offset: u64, object_type: BinaryObject, data: Vec<u8>) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
+    fn unpack_delta<T: Read + Seek>(
+        &self,
+        packfile: &mut Pack<T>,
+        offset: u64,
+        object_type: BinaryObject,
+        data: Vec<u8>,
+    ) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
         println!("unpacking delta");
         let data = match object_type {
-            BinaryObject::Blob | BinaryObject::Commit | BinaryObject::Tag | BinaryObject::Tree => {
-                (object_type, data)
-            }
-            BinaryObject::OffsetDelta(delta_offset) => {
+            Blob | Commit | Tag | Tree => (object_type, data),
+            OffsetDelta(delta_offset) => {
                 let (next_object_type, next_data) =
                     packfile.read_object_data_at(offset - delta_offset)?;
-                let (next_object_type, next_data) =
-                    self.unpack_delta(packfile, offset - delta_offset, next_object_type, next_data)?;
-                (next_object_type, DeltaObject::from(&data)?.rebuild(next_data))
+                let (next_object_type, next_data) = self.unpack_delta(
+                    packfile,
+                    offset - delta_offset,
+                    next_object_type,
+                    next_data,
+                )?;
+                (
+                    next_object_type,
+                    DeltaObject::from(&data)?.rebuild(next_data),
+                )
             }
-            BinaryObject::RefDelta(reference) => {
-                todo!()
+            RefDelta(reference) => {
+                let (next_object_type, next_data) =
+                    self.read_object_data(reference.encode_hex())?;
+                let (next_object_type, next_data) =
+                    self.unpack_delta(packfile, todo!(), next_object_type, next_data)?;
+                (
+                    next_object_type,
+                    DeltaObject::from(&data)?.rebuild(next_data),
+                )
             }
         };
         println!("\tunpacked");
@@ -397,8 +423,12 @@ impl Repository {
             };
 
             if recurse && _type == "tree" {
-                self.ls_tree(&item.sha1.encode_hex::<String>(), recurse, &path.join(&item.path))
-                    .expect("Failed to descend tree");
+                self.ls_tree(
+                    &item.sha1.encode_hex::<String>(),
+                    recurse,
+                    &path.join(&item.path),
+                )
+                .expect("Failed to descend tree");
             } else {
                 println!(
                     "{} {} {} {}",

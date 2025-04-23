@@ -1,6 +1,9 @@
 extern crate sha1;
 
-use std::{error::Error, io::{BufReader, Read}};
+use std::{
+    error::Error,
+    io::{BufReader, Read},
+};
 use std::io::{Seek, SeekFrom};
 
 use flate2::bufread::ZlibDecoder;
@@ -47,7 +50,10 @@ impl<T: Read + Seek> Pack<T> {
         Ok(result)
     }
 
-    pub fn read_object_data_at(&mut self, offset: u64) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
+    pub fn read_object_data_at(
+        &mut self,
+        offset: u64,
+    ) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
         self.reader.seek(SeekFrom::Start(offset))?;
         read_data(&mut self.reader)
     }
@@ -85,7 +91,10 @@ impl<T: Read + Seek> Pack<T> {
     }
 }
 
-fn read_compressed<T: Read>(reader: &mut BufReader<T>, size: usize) -> Result<Vec<u8>, Box<dyn Error>> {
+fn read_compressed<T: Read>(
+    reader: &mut BufReader<T>,
+    size: usize,
+) -> Result<Vec<u8>, Box<dyn Error>> {
     println!("reading compressed: {size}");
     let mut bytes = vec![b'\0'; size];
     let mut z = ZlibDecoder::new(reader);
@@ -112,11 +121,14 @@ impl BinaryObject {
             BinaryObject::Tree => "tree",
             BinaryObject::OffsetDelta(_) => "offsetdelta",
             BinaryObject::RefDelta(_) => "refdelta",
-        }.to_string()
+        }
+        .to_string()
     }
 }
 
-pub fn read_data<T: Read>(reader: &mut BufReader<T>) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
+pub fn read_data<T: Read>(
+    reader: &mut BufReader<T>,
+) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
     println!("reading object");
     let mut read = [0; 1];
     reader.read_exact(&mut read)?;
@@ -141,7 +153,7 @@ pub fn read_data<T: Read>(reader: &mut BufReader<T>) -> Result<(BinaryObject, Ve
         0b100 => BinaryObject::Tag,
         0b110 => BinaryObject::OffsetDelta(parse_offset_delta(reader)?),
         0b111 => BinaryObject::RefDelta(read_sha1(reader)?),
-        _ => unimplemented!()
+        _ => unimplemented!(),
     };
 
     println!("read object {}, size: {}", object_type.name(), size);
@@ -153,7 +165,10 @@ pub fn read_object<T: Read>(reader: &mut BufReader<T>) -> Result<GitObject, Box<
     parse_object_data(object_type, data)
 }
 
-pub fn parse_object_data(object_type: BinaryObject, data: Vec<u8>) -> Result<GitObject, Box<dyn Error>> {
+pub fn parse_object_data(
+    object_type: BinaryObject,
+    data: Vec<u8>,
+) -> Result<GitObject, Box<dyn Error>> {
     let object = match object_type {
         BinaryObject::Commit => Commit(CommitObject::from(&data)?),
         BinaryObject::Tree => Tree(TreeObject::from(&data)?),

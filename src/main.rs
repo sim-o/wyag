@@ -8,9 +8,9 @@ use std::{
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-mod repository;
 use repository::Repository;
 
+mod repository;
 mod gitobject;
 mod kvlm;
 mod pack;
@@ -140,7 +140,11 @@ fn ls_tree(path: &Path, tree: String, recurse: bool) -> Result<(), Box<dyn Error
     repo.ls_tree(&tree, recurse, Path::new("."))
 }
 
-fn write_object(_type: CommandObjectType, file: PathBuf, write: bool) -> Result<(), Box<dyn Error>> {
+fn write_object(
+    _type: CommandObjectType,
+    file: PathBuf,
+    write: bool,
+) -> Result<(), Box<dyn Error>> {
     let repo = Repository::find(Path::new("."))?;
     let sha1 = repo.object_hash(&file, _type, write)?;
     println!("{}", sha1);

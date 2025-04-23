@@ -1,6 +1,5 @@
 use std::{
-    cell::RefCell
-    ,
+    cell::RefCell,
     error::Error,
     fmt::{Debug, Display},
     path::PathBuf,
@@ -59,8 +58,13 @@ impl GitObject {
             GitObject::Commit(_) => BinaryObject::Commit,
             GitObject::Tree(_) => BinaryObject::Tree,
             GitObject::Tag(_) => BinaryObject::Tag,
-            GitObject::OffsetDelta(OffsetDeltaObject{ offset, delta: _ }) => BinaryObject::OffsetDelta(*offset),
-            GitObject::RefDelta(RefDeltaObject{ reference, delta: _ }) => BinaryObject::RefDelta(*reference),
+            GitObject::OffsetDelta(OffsetDeltaObject { offset, delta: _ }) => {
+                BinaryObject::OffsetDelta(*offset)
+            }
+            GitObject::RefDelta(RefDeltaObject {
+                reference,
+                delta: _,
+            }) => BinaryObject::RefDelta(*reference),
         }
     }
 
@@ -268,7 +272,7 @@ impl DeltaObject {
         for instr in self.instructions.iter() {
             match instr {
                 DeltaInstruction::Copy(offset, size) => {
-                    result.extend_from_slice(&data[*offset..offset+size]);
+                    result.extend_from_slice(&data[*offset..offset + size]);
                 }
                 DeltaInstruction::Insert(insert) => {
                     result.extend_from_slice(&insert);
@@ -289,10 +293,10 @@ impl OffsetDeltaObject {
 }
 
 impl RefDeltaObject {
-    pub fn new(reference: [u8;20], data: &Vec<u8>) -> Result<Self, Box<dyn Error>> {
+    pub fn new(reference: [u8; 20], data: &Vec<u8>) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
             reference,
-            delta: parse_delta_data(data)?
+            delta: parse_delta_data(data)?,
         })
     }
 }
@@ -395,7 +399,7 @@ fn parse_delta_data(reader: &[u8]) -> Result<DeltaObject, Box<dyn Error>> {
     Ok(DeltaObject {
         base_size,
         expanded_size,
-        instructions
+        instructions,
     })
 }
 
@@ -422,7 +426,9 @@ mod test {
             TreeLeaf {
                 path: PathBuf::from(".github"),
                 mode: "040000".to_string(),
-                sha1: <[u8; 20]>::from_hex("a0ef2d9bb064800d8faceb96832b3ed26eb57412").unwrap().to_vec()
+                sha1: <[u8; 20]>::from_hex("a0ef2d9bb064800d8faceb96832b3ed26eb57412")
+                    .unwrap()
+                    .to_vec()
             }
         );
 

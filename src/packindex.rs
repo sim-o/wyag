@@ -26,7 +26,13 @@ impl<T: Read + Seek> PackIndex<T> {
         {
             let mut header = [0; 4];
             self.reader.read_exact(&mut header)?;
-            if !header.iter().zip(INDEX_HEADER).map(|(&a, &b)| a == b).reduce(|acc, v| acc && v).unwrap_or(false) {
+            if !header
+                .iter()
+                .zip(INDEX_HEADER)
+                .map(|(&a, &b)| a == b)
+                .reduce(|acc, v| acc && v)
+                .unwrap_or(false)
+            {
                 println!("header {}", header.encode_hex::<String>());
                 return Err(Error::from(ErrorKind::InvalidData));
             }
@@ -45,7 +51,11 @@ impl<T: Read + Seek> PackIndex<T> {
         let hashes = {
             let mut hashes = vec![0; 20 * fanout[255] as usize];
             self.reader.read_exact(&mut hashes)?;
-            hashes.chunks_exact(20).into_iter().map(|b| b.to_vec()).collect::<Vec<_>>()
+            hashes
+                .chunks_exact(20)
+                .into_iter()
+                .map(|b| b.to_vec())
+                .collect::<Vec<_>>()
         };
 
         let crc32 = self.read_n_u32be(fanout[255] as usize)?;
@@ -61,7 +71,11 @@ impl<T: Read + Seek> PackIndex<T> {
 
     fn search_hash(hashes: Vec<Vec<u8>>, fanout: Vec<u32>, sha1: &[u8]) -> Option<usize> {
         assert_eq!(sha1.len(), 20);
-        let mut left = if sha1[0] == 0 { 0 } else { fanout[sha1[0] as usize - 1] as usize };
+        let mut left = if sha1[0] == 0 {
+            0
+        } else {
+            fanout[sha1[0] as usize - 1] as usize
+        };
         let mut right = fanout[sha1[0] as usize] as usize;
         while left <= right {
             let i = (right - left) / 2 + left;
@@ -77,15 +91,13 @@ impl<T: Read + Seek> PackIndex<T> {
     fn read_n_u32be(&mut self, n: usize) -> Result<Vec<u32>, Error> {
         let mut crc32 = vec![0; 4 * n];
         self.reader.read_exact(&mut crc32)?;
-        Ok(
-            crc32
-                .chunks_exact(4)
-                .into_iter()
-                .map(|b| {
-                    let b: [u8;4] = b.try_into().unwrap();
-                    u32::from_be_bytes(b)
-                })
-                .collect::<Vec<u32>>()
-        )
+        Ok(crc32
+            .chunks_exact(4)
+            .into_iter()
+            .map(|b| {
+                let b: [u8; 4] = b.try_into().unwrap();
+                u32::from_be_bytes(b)
+            })
+            .collect::<Vec<u32>>())
     }
 }
