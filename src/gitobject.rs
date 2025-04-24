@@ -254,14 +254,14 @@ pub struct DeltaObject {
 
 #[derive(Debug)]
 pub struct OffsetDeltaObject {
-    pub(crate) offset: u64,
-    pub(crate) delta: DeltaObject,
+    pub offset: u64,
+    pub delta: DeltaObject,
 }
 
 #[derive(Debug)]
 pub struct RefDeltaObject {
-    pub(crate) reference: [u8; 20],
-    pub(crate) delta: DeltaObject,
+    pub reference: [u8; 20],
+    pub delta: DeltaObject,
 }
 
 impl DeltaObject {
@@ -269,7 +269,7 @@ impl DeltaObject {
         parse_delta_data(data)
     }
 
-    pub(crate) fn rebuild(&self, data: Vec<u8>) -> Vec<u8> {
+    pub fn rebuild(&self, data: Vec<u8>) -> Vec<u8> {
         let mut result = Vec::new();
         for instr in self.instructions.iter() {
             match instr {

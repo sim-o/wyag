@@ -1,6 +1,15 @@
 extern crate sha1;
 
+use bytes::{Buf, BufMut};
+use configparser::ini::Ini;
+use flate2::bufread::{ZlibDecoder, ZlibEncoder};
+use flate2::Compression;
+use hex::{decode, ToHex};
+use log::{debug, trace};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io::Seek;
+use std::rc::Rc;
 use std::{
     error::Error,
     fs::{create_dir_all, File},
@@ -8,13 +17,6 @@ use std::{
     path::{Path, PathBuf},
     str::from_utf8,
 };
-
-use bytes::{Buf, BufMut};
-use configparser::ini::Ini;
-use flate2::bufread::{ZlibDecoder, ZlibEncoder};
-use flate2::Compression;
-use hex::{decode, ToHex};
-use log::{debug, trace};
 use BinaryObject::{OffsetDelta, RefDelta};
 
 use crate::cli::CommandObjectType;
@@ -30,6 +32,7 @@ pub struct Repository {
     pub worktree: PathBuf,
     gitdir: PathBuf,
     conf: Option<Ini>,
+    pack_cache: RefCell<HashMap<String, Rc<RefCell<Pack<File>>>>>,
 }
 
 impl Repository {
@@ -70,6 +73,7 @@ impl Repository {
             worktree: path.into(),
             gitdir,
             conf,
+            pack_cache: RefCell::new(HashMap::new()),
         })
     }
 
@@ -282,13 +286,28 @@ impl Repository {
         self.read_object_from_location(sha1, &location)
     }
 
-    fn open_pack(&self, sha1: &str) -> Result<Pack<File>, Box<dyn Error>> {
-        let packfile_name = format!("pack-{}.pack", sha1);
-        let packfile_path = Path::new("objects").join("pack").join(packfile_name);
-        match self.repo_file(&packfile_path, false) {
-            Some(packfile_path) => Ok(Pack::new(BufReader::new(File::open(packfile_path)?))?),
-            None => Err("Failed to load packfile")?,
-        }
+    fn open_pack(&self, sha1: &str) -> Result<Rc<RefCell<Pack<File>>>, Box<dyn Error>> {
+        let value = {
+            let cache = self.pack_cache.borrow();
+            cache.get(sha1).cloned()
+        };
+        let pack = match value {
+            None => {
+                let packfile_name = format!("pack-{}.pack", sha1);
+                let packfile_path = Path::new("objects").join("pack").join(packfile_name);
+                let pack = match self.repo_file(&packfile_path, false) {
+                    Some(packfile_path) => Pack::new(BufReader::new(File::open(packfile_path)?))?,
+                    None => Err("Failed to load packfile")?,
+                };
+                let pack = Rc::new(RefCell::new(pack));
+                self.pack_cache
+                    .borrow_mut()
+                    .insert(sha1.to_string(), pack.clone());
+                pack
+            }
+            Some(pack) => pack,
+        };
+        Ok(pack)
     }
 
     fn read_object_from_location(
@@ -299,7 +318,8 @@ impl Repository {
         match location {
             ObjectFile => self.read_object_file_data(sha1),
             PackFile(pack, offset) => {
-                let mut packfile = self.open_pack(pack)?;
+                let rc = self.open_pack(pack)?;
+                let mut packfile = rc.borrow_mut();
                 let (object_type, data) = packfile.read_object_data_at(*offset)?;
                 let (object_type, data) =
                     self.unpack_delta(&mut packfile, *offset, object_type, data)?;
@@ -342,7 +362,8 @@ impl Repository {
                 let (next_object_type, next_data) = match location {
                     ObjectFile => self.unpack_delta(packfile, 0, next_object_type, next_data)?,
                     PackFile(pack, offset) => {
-                        let mut next_pack = self.open_pack(&pack)?;
+                        let rc = self.open_pack(&pack)?;
+                        let mut next_pack = rc.borrow_mut();
                         self.unpack_delta(&mut next_pack, offset, next_object_type, next_data)?
                     }
                 };

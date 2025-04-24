@@ -59,18 +59,25 @@ impl<T: Read + Seek> PackIndex<T> {
                 .collect::<Vec<_>>()
         };
 
-        let crc32 = self.read_n_u32be(fanout[255] as usize)?;
+        let _crc32 = self.read_n_u32be(fanout[255] as usize)?;
         let offsets = self.read_n_u32be(fanout[255] as usize)?;
 
-        let index = match Self::search_hash(hashes, fanout, sha1) {
+        let index = match Self::search_hash(hashes, &fanout, sha1) {
             Some(value) => value,
             None => return Ok(None),
         };
 
-        Ok(Some(offsets[index] as u64))
+        let offset = offsets[index];
+        if offset & 0x8000_0000 != 0 {
+            let i: usize = (offset ^ 0x8000_0000) as usize;
+            let offsets64 = self.read_n_u64be(i)?;
+            return Ok(Some(offsets64[i]));
+        }
+
+        Ok(Some(offset as u64))
     }
 
-    fn search_hash(hashes: Vec<Vec<u8>>, fanout: Vec<u32>, sha1: &[u8]) -> Option<usize> {
+    fn search_hash(hashes: Vec<Vec<u8>>, fanout: &[u32], sha1: &[u8]) -> Option<usize> {
         assert_eq!(sha1.len(), 20);
         let mut left = if sha1[0] == 0 {
             0
@@ -86,19 +93,31 @@ impl<T: Read + Seek> PackIndex<T> {
                 Ordering::Equal => return Some(i),
             }
         }
-        return None;
+        None
     }
 
     fn read_n_u32be(&mut self, n: usize) -> Result<Vec<u32>, Error> {
-        let mut crc32 = vec![0; 4 * n];
-        self.reader.read_exact(&mut crc32)?;
-        Ok(crc32
-            .chunks_exact(4)
+        let mut buf = vec![0; size_of::<u32>() * n];
+        self.reader.read_exact(&mut buf)?;
+        Ok(buf
+            .chunks_exact(size_of::<u32>())
             .into_iter()
             .map(|b| {
-                let b: [u8; 4] = b.try_into().unwrap();
+                let b: [u8; size_of::<u32>()] = b.try_into().unwrap();
                 u32::from_be_bytes(b)
             })
             .collect::<Vec<u32>>())
+    }
+    fn read_n_u64be(&mut self, n: usize) -> Result<Vec<u64>, Error> {
+        let mut buf = vec![0; size_of::<u64>() * n];
+        self.reader.read_exact(&mut buf)?;
+        Ok(buf
+            .chunks_exact(size_of::<u64>())
+            .into_iter()
+            .map(|b| {
+                let b: [u8; size_of::<u64>()] = b.try_into().unwrap();
+                u64::from_be_bytes(b)
+            })
+            .collect::<Vec<u64>>())
     }
 }
