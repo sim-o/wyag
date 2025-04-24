@@ -46,6 +46,10 @@ fn main() {
             repository,
             packfile,
         } => ls_pack(&repository.unwrap_or(PathBuf::new()), packfile),
+        Commands::Log {
+            repository,
+            reference,
+        } => log(repository.unwrap_or(PathBuf::new()), reference),
     };
 
     if let Err(error) = result {
@@ -75,13 +79,23 @@ fn hash_object(_type: CommandObjectType, file: PathBuf, write: bool) -> Result<(
 
 fn read_object(
     repository: PathBuf,
-    object_type: CommandObjectType,
+    _object_type: CommandObjectType,
     name: String,
 ) -> Result<(), Box<dyn Error>> {
     let repo = Repository::find(&repository)?;
-    let sha1 = repo.find_object(object_type, &name)?;
+    let sha1 = repo.find_object(&name)?;
     let obj = repo.read_object(&sha1)?;
     std::io::stdout().write_all(&obj.serialize())?;
+    Ok(())
+}
+
+fn log(repository: PathBuf, name: String) -> Result<(), Box<dyn Error>> {
+    let repo = Repository::find(&repository)?;
+    let sha1 = repo.find_object(&name)?;
+    let obj = repo.log(sha1)?;
+    for msg in obj {
+        println!("{}", msg);
+    }
     Ok(())
 }
 

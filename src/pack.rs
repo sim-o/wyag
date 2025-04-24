@@ -6,9 +6,9 @@ use std::{
     io::{BufReader, Read},
 };
 
+use GitObject::{Tag, Tree};
 use flate2::bufread::ZlibDecoder;
 use log::{debug, warn};
-use GitObject::{Tag, Tree};
 
 use crate::gitobject::GitObject::{Blob, Commit, OffsetDelta, RefDelta};
 use crate::gitobject::{BlobObject, CommitObject, GitObject, TagObject, TreeObject};
@@ -132,7 +132,7 @@ pub fn read_data<T: Read>(
     debug!("reading object");
     let mut read = [0; 1];
     reader.read_exact(&mut read)?;
-    let _type = (read[0] >> 4) & 0x7;
+    let type_id = (read[0] >> 4) & 0x7;
 
     let size = {
         let mut size = read[0] as usize & 0xf;
@@ -146,14 +146,14 @@ pub fn read_data<T: Read>(
         size
     };
 
-    let object_type = match _type {
+    let object_type = match type_id {
         0b001 => BinaryObject::Commit,
         0b010 => BinaryObject::Tree,
         0b011 => BinaryObject::Blob,
         0b100 => BinaryObject::Tag,
         0b110 => BinaryObject::OffsetDelta(parse_offset_delta(reader)?),
         0b111 => BinaryObject::RefDelta(read_sha1(reader)?),
-        _ => unimplemented!(),
+        _ => Err(format!("unexpected object type {}", type_id))?,
     };
 
     debug!("read object {}, size: {}", object_type.name(), size);

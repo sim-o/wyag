@@ -188,10 +188,10 @@ impl Repository {
 
         let size_idx = type_idx
             + raw
-                .iter()
-                .skip(type_idx)
-                .position(|&b| b == b'\x00')
-                .ok_or("object corrupt: missing size")?;
+            .iter()
+            .skip(type_idx)
+            .position(|&b| b == b'\x00')
+            .ok_or("object corrupt: missing size")?;
 
         trace!("reading size...");
         let size = from_utf8(&raw[type_idx + 1..size_idx])?.parse::<usize>()?;
@@ -377,14 +377,35 @@ impl Repository {
         Ok(data)
     }
 
-    pub fn find_object(
-        &self,
-        _: CommandObjectType,
-        name: &str,
-    ) -> Result<[u8; 20], Box<dyn Error>> {
-        Ok(decode(name)?
-            .try_into()
-            .map_err(|_| "hash has incorrect length")?)
+    pub fn find_object(&self, name: &str) -> Result<[u8; 20], Box<dyn Error>> {
+        if let Some(hash) = decode(name).ok() {
+            if let Ok(hash) = hash.try_into() {
+                return Ok(hash);
+            }
+        }
+
+        if let Some(buf) = self.repo_file(&Path::new("refs").join("heads").join(name), false) {
+            let mut ref_contents = String::new();
+            File::open(buf).unwrap().read_to_string(&mut ref_contents)?;
+            let ref_contents = ref_contents.trim_end_matches(&[' ', '\t', '\n', '\r']);
+            return if let Some(ref_contents) = ref_contents.strip_prefix("ref: ") {
+                self.find_object(&ref_contents)
+            } else {
+                let sha1_decode: Result<[u8; 20], _> = match decode(&ref_contents) {
+                    Ok(sha1) => sha1.try_into(),
+                    _ => Err(format!(
+                        "Failed to decode reference file contents: '{}'",
+                        ref_contents
+                    ))?,
+                };
+                match sha1_decode {
+                    Ok(result) => Ok(result),
+                    _ => Err("sha1 has incorrect length")?,
+                }
+            };
+        }
+
+        Err(format!("reference does not exist: {}", name))?
     }
 
     pub fn write_object(&self, obj: &GitObject, write: bool) -> Result<String, Box<dyn Error>> {
@@ -466,7 +487,7 @@ impl Repository {
         path: &Path,
     ) -> Result<(), Box<dyn Error>> {
         trace!("finding object {}", reference);
-        let sha1 = self.find_object(CommandObjectType::Tree, reference)?;
+        let sha1 = self.find_object(reference)?;
         trace!("reading object {}", sha1.encode_hex::<String>());
         let object = match self.read_object(&sha1)? {
             GitObject::Tree(tree) => tree,
@@ -489,7 +510,7 @@ impl Repository {
                     recurse,
                     &path.join(&item.path),
                 )
-                .expect("Failed to descend tree");
+                    .expect("Failed to descend tree");
             } else {
                 trace!(
                     "{} {} {} {}",
@@ -502,6 +523,36 @@ impl Repository {
         });
 
         Ok(())
+    }
+
+    pub fn log(&self, sha1: [u8; 20]) -> Result<Vec<String>, Box<dyn Error>> {
+        let mut sha1 = sha1;
+        let mut result = Vec::new();
+        loop {
+            let object = self.read_object(&sha1)?;
+            match object {
+                GitObject::Commit(commit) => {
+                    result.push(
+                        format!(
+                            "{} {}: {}",
+                            sha1.encode_hex::<String>(),
+                            commit.author().get(0).unwrap_or(&"<<no author>>".to_string()),
+                            commit.message().unwrap_or("".to_string())
+                        )
+                            .replace("\n", " "),
+                    );
+                    if let Some(&next_sha1) = commit.parents().get(0) {
+                        trace!("ascending {}", next_sha1.encode_hex::<String>());
+                        sha1 = next_sha1;
+                    } else {
+                        break;
+                    }
+                }
+                _ => Err("expected commit")?,
+            }
+        }
+
+        Ok(result)
     }
 }
 

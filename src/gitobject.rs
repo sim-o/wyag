@@ -1,4 +1,9 @@
+use bytes::Buf;
+use hex::{decode, ToHex};
+use log::{debug, trace};
+use ordered_hash_map::OrderedHashMap;
 use std::io::{BufReader, ErrorKind, Read};
+use std::ops::Deref;
 use std::{
     cell::RefCell,
     error::Error,
@@ -6,11 +11,6 @@ use std::{
     path::PathBuf,
     str::from_utf8,
 };
-
-use bytes::Buf;
-use hex::ToHex;
-use log::debug;
-use ordered_hash_map::OrderedHashMap;
 
 use crate::kvlm::{kvlm_parse, kvlm_serialize};
 use crate::pack::BinaryObject;
@@ -64,9 +64,9 @@ impl GitObject {
                 BinaryObject::OffsetDelta(*offset)
             }
             GitObject::RefDelta(RefDeltaObject {
-                reference,
-                delta: _,
-            }) => BinaryObject::RefDelta(*reference),
+                                    reference,
+                                    delta: _,
+                                }) => BinaryObject::RefDelta(*reference),
         }
     }
 
@@ -106,6 +106,54 @@ impl Display for BlobObject {
 #[derive(Debug)]
 pub struct CommitObject {
     kvlm: OrderedHashMap<String, Vec<Vec<u8>>>,
+}
+
+impl CommitObject {
+    pub fn author(&self) -> Vec<String> {
+        self.kvlm
+            .get("author")
+            .into_iter()
+            .flat_map(|a| {
+                a.get(0)
+                    .into_iter()
+                    .flat_map(|v| from_utf8(&v).map(|v| v.to_string()))
+            })
+            .collect()
+    }
+}
+
+impl CommitObject {
+    pub fn message(&self) -> Option<String> {
+        self.kvlm
+            .get("")
+            .into_iter()
+            .flat_map(|a| {
+                a.get(0)
+                    .into_iter()
+                    .flat_map(|v| from_utf8(&v).map(|v| v.to_string()))
+            })
+            .next()
+    }
+
+    pub fn parents(&self) -> Vec<[u8; 20]> {
+        let option = self.kvlm.get("parent");
+        if let Some(values) = option {
+            trace!("found parent values: {}", values.len());
+            values
+                .into_iter()
+                .flat_map(|a| {
+                    trace!("found parent: {}", from_utf8(a).unwrap_or("<<bad utf8>>"));
+                    from_utf8(a)
+                        .ok()
+                        .into_iter()
+                        .flat_map(|s| decode(s).ok())
+                        .flat_map(|v| v.deref().try_into())
+                })
+                .collect()
+        } else {
+            vec![]
+        }
+    }
 }
 
 impl CommitObject {

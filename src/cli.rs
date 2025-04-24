@@ -131,4 +131,13 @@ pub enum Commands {
         /// A packfile sha.
         packfile: String,
     },
+
+    Log {
+        /// Path to repository.
+        #[arg(long)]
+        repository: Option<PathBuf>,
+
+        /// An object name.
+        reference: String,
+    },
 }
