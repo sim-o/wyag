@@ -241,8 +241,10 @@ impl Repository {
     }
 
     fn find_object_location(&self, sha1: [u8; 20]) -> Option<ObjectLocation> {
-        if self.object_file_path(sha1).is_some() {
-            return Some(ObjectFile);
+        if let Some(path) = self.object_file_path(sha1) {
+            if path.is_file() {
+                return Some(ObjectFile);
+            }
         }
 
         let found = self
