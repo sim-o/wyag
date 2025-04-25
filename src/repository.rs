@@ -28,12 +28,14 @@ use crate::packindex::PackIndex;
 use crate::repository::ObjectLocation::{ObjectFile, PackFile};
 use crate::util::{get_sha1, validate_sha1};
 
+type PackRef = Rc<RefCell<Pack<File>>>;
+
 pub struct Repository {
     pub worktree: PathBuf,
     gitdir: PathBuf,
     conf: Option<Ini>,
     index_cache: RefCell<HashMap<PathBuf, Rc<PackIndex>>>,
-    pack_cache: RefCell<HashMap<[u8; 20], Rc<RefCell<Pack<File>>>>>,
+    pack_cache: RefCell<HashMap<[u8; 20], PackRef>>,
 }
 
 impl Repository {

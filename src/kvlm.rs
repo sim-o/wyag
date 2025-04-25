@@ -199,8 +199,8 @@ Q52UWybBzpaP9HEd4XnR+HuQ4k2K0ns2KgNImsNvIyFwbpMUyUWLMPimaV1DWUXo
     }
 
     fn assert_bytes_eq(actual: Option<&Vec<Vec<u8>>>, expected: Vec<Vec<u8>>, msg: &str) {
-        actual
-            .expect(&format!("{}: {}", msg, "value does not exist in map"))
+        assert!(actual.is_some(), "{}: {}", msg, "value does not exist in map");
+        actual.unwrap()
             .iter()
             .zip(expected)
             .for_each(|(actual, expected)| {

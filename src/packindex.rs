@@ -39,9 +39,9 @@ impl PackIndex {
             "pack sha: {}, index sha: {}, actual index sha: {}",
             pack_sha1.encode_hex::<String>(),
             index_sha1.encode_hex::<String>(),
-            actual_index_sha1.map(|h| h.encode_hex::<String>()).unwrap_or("-hashing index failed-".to_string())
+            actual_index_sha1.encode_hex::<String>()
         );
-        assert_eq!(actual_index_sha1, Some(index_sha1));
+        assert_eq!(actual_index_sha1, index_sha1);
 
         Ok(PackIndex {
             fanout,
