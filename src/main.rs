@@ -84,7 +84,7 @@ fn read_object(
 ) -> Result<(), Box<dyn Error>> {
     let repo = Repository::find(&repository)?;
     let sha1 = repo.find_object(&name)?;
-    let obj = repo.read_object(&sha1)?;
+    let obj = repo.read_object(sha1)?;
     std::io::stdout().write_all(&obj.serialize())?;
     Ok(())
 }
