@@ -59,10 +59,7 @@ impl PackIndex {
     }
 
     pub fn find(&self, sha1: [u8; 20]) -> Option<u64> {
-        let index = match self.search_hash(sha1) {
-            Some(value) => value,
-            None => return None,
-        };
+        let index = self.search_hash(sha1)?;
 
         let offset = self.offsets[index];
         if offset & 0x8000_0000 != 0 {
@@ -125,7 +122,6 @@ fn read_hashes<T: Read>(reader: &mut HashingReader<T>, items: usize) -> Result<V
         reader.read_exact(&mut hashes)?;
         hashes
             .chunks_exact(20)
-            .into_iter()
             .map(|b| b.try_into().unwrap())
             .collect::<Vec<_>>()
     };
@@ -137,7 +133,6 @@ fn read_n_u32be<T: Read>(reader: &mut HashingReader<T>, n: usize) -> Result<Vec<
     reader.read_exact(&mut buf)?;
     Ok(buf
         .chunks_exact(size_of::<u32>())
-        .into_iter()
         .map(|b| {
             let b: [u8; size_of::<u32>()] = b.try_into().unwrap();
             u32::from_be_bytes(b)
@@ -150,7 +145,6 @@ fn read_n_u64be<T: Read>(reader: &mut HashingReader<T>, n: usize) -> Result<Vec<
     reader.read_exact(&mut buf)?;
     Ok(buf
         .chunks_exact(size_of::<u64>())
-        .into_iter()
         .map(|b| {
             let b: [u8; size_of::<u64>()] = b.try_into().unwrap();
             u64::from_be_bytes(b)

@@ -1,6 +1,9 @@
+use crate::kvlm::{kvlm_parse, kvlm_serialize};
+use crate::pack::BinaryObject;
+use crate::util::{parse_variable_length, read_byte};
 use bytes::Buf;
 use hex::{decode, ToHex};
-use log::{debug, trace};
+use log::debug;
 use ordered_hash_map::OrderedHashMap;
 use std::io::{BufReader, ErrorKind, Read};
 use std::ops::Deref;
@@ -11,10 +14,6 @@ use std::{
     path::PathBuf,
     str::from_utf8,
 };
-
-use crate::kvlm::{kvlm_parse, kvlm_serialize};
-use crate::pack::BinaryObject;
-use crate::util::{parse_variable_length, read_byte};
 
 #[derive(Debug)]
 pub enum GitObject {
@@ -109,59 +108,38 @@ pub struct CommitObject {
 }
 
 impl CommitObject {
-    pub fn author(&self) -> Vec<String> {
+    fn get(&self, name: &str) -> impl Iterator<Item=String> {
         self.kvlm
-            .get("author")
+            .get(name)
             .into_iter()
             .flat_map(|a| {
-                a.get(0)
+                a.first()
                     .into_iter()
-                    .flat_map(|v| from_utf8(&v).map(|v| v.to_string()))
+                    .flat_map(|v| from_utf8(v).map(|v| v.to_string()))
             })
-            .collect()
     }
-}
 
-impl CommitObject {
+    pub fn author(&self) -> Vec<String> {
+        self.get("author").collect()
+    }
+
     pub fn message(&self) -> Option<String> {
-        self.kvlm
-            .get("")
-            .into_iter()
-            .flat_map(|a| {
-                a.get(0)
-                    .into_iter()
-                    .flat_map(|v| from_utf8(&v).map(|v| v.to_string()))
-            })
-            .next()
+        self.get("").next()
     }
 
     pub fn parents(&self) -> Vec<[u8; 20]> {
-        let option = self.kvlm.get("parent");
-        if let Some(values) = option {
-            trace!("found parent values: {}", values.len());
-            values
-                .into_iter()
-                .flat_map(|a| {
-                    trace!("found parent: {}", from_utf8(a).unwrap_or("<<bad utf8>>"));
-                    from_utf8(a)
-                        .ok()
-                        .into_iter()
-                        .flat_map(|s| decode(s).ok())
-                        .flat_map(|v| v.deref().try_into())
-                })
-                .collect()
-        } else {
-            vec![]
-        }
+        self.get("parent")
+            .flat_map(|s| decode(s).ok())
+            .flat_map(|v| v.deref().try_into().ok())
+            .collect()
     }
-}
 
-impl CommitObject {
     pub fn from(data: &[u8]) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
             kvlm: kvlm_parse(data)?,
         })
     }
+    
     pub fn serialize(&self) -> Vec<u8> {
         kvlm_serialize(&self.kvlm)
     }
