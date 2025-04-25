@@ -1,30 +1,29 @@
 extern crate sha1;
 
-use BinaryObject::{OffsetDelta, RefDelta};
 use bytes::{Buf, BufMut};
 use configparser::ini::Ini;
-use flate2::Compression;
 use flate2::bufread::{ZlibDecoder, ZlibEncoder};
-use hex::{ToHex, decode};
+use flate2::Compression;
+use hex::{decode, ToHex};
 use log::{debug, error, trace};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::io::Seek;
-use std::ops::Deref;
 use std::rc::Rc;
 use std::{
     error::Error,
-    fs::{File, create_dir_all},
+    fs::{create_dir_all, File},
     io::{BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     str::from_utf8,
 };
+use BinaryObject::{OffsetDelta, RefDelta};
 
 use crate::cli::CommandObjectType;
 use crate::gitobject::DeltaObject;
 use crate::gitobject::{BlobObject, GitObject};
 use crate::pack::BinaryObject::{Blob, Commit, Tag, Tree};
-use crate::pack::{BinaryObject, Pack, parse_object_data};
+use crate::pack::{parse_object_data, BinaryObject, Pack};
 use crate::packindex::PackIndex;
 use crate::repository::ObjectLocation::{ObjectFile, PackFile};
 use crate::util::{get_sha1, validate_sha1};
@@ -191,10 +190,10 @@ impl Repository {
 
         let size_idx = type_idx
             + raw
-                .iter()
-                .skip(type_idx)
-                .position(|&b| b == b'\x00')
-                .ok_or("object corrupt: missing size")?;
+            .iter()
+            .skip(type_idx)
+            .position(|&b| b == b'\x00')
+            .ok_or("object corrupt: missing size")?;
 
         trace!("reading size...");
         let size = from_utf8(&raw[type_idx + 1..size_idx])?.parse::<usize>()?;
@@ -257,14 +256,8 @@ impl Repository {
                         let path = p.path();
                         if name.starts_with("pack-") && name.ends_with(".idx") && path.is_file() {
                             debug!("found pack: {name}");
-                            if let Some(id) = decode(&name[5..name.len() - 4])
-                                .iter()
-                                .flat_map(|v| v.deref().try_into().ok())
-                                .next()
-                            {
-                                if let Ok(value) = self.open_index(id, &path) {
-                                    return Some(value);
-                                }
+                            if let Ok(value) = self.open_index(&path) {
+                                return Some(value);
                             }
                         }
                     }
@@ -289,13 +282,13 @@ impl Repository {
         None
     }
 
-    fn open_index(&self, id: [u8; 20], path: &Path) -> Result<Rc<PackIndex>, Box<dyn Error>> {
+    fn open_index(&self, path: &Path) -> Result<Rc<PackIndex>, Box<dyn Error>> {
         if let Some(cached) = self.index_cache.borrow().get(path) {
             return Ok(cached.clone());
         }
 
         let file = File::open(path)?;
-        let index = Rc::new(PackIndex::new(id, BufReader::new(file))?);
+        let index = Rc::new(PackIndex::new(BufReader::new(file))?);
         self.index_cache
             .borrow_mut()
             .insert(path.to_path_buf(), index.clone());
@@ -533,7 +526,7 @@ impl Repository {
                     recurse,
                     &path.join(&item.path),
                 )
-                .expect("Failed to descend tree");
+                    .expect("Failed to descend tree");
             } else {
                 trace!(
                     "{} {} {} {}",
@@ -574,7 +567,7 @@ impl Repository {
                                 .unwrap_or(&"<<no author>>".to_string()),
                             commit.message().unwrap_or("".to_string())
                         )
-                        .replace("\n", " "),
+                            .replace("\n", " "),
                     );
                     if let Some(&next_sha1) = commit.parents().get(0) {
                         trace!("ascending {}", next_sha1.encode_hex::<String>());
@@ -599,7 +592,7 @@ impl Repository {
 
 fn default_config() -> Ini {
     let mut ini = Ini::new();
-    ini.setstr("core", "grepositoryformatversion", Some("0"));
+    ini.setstr("core", "repositoryformatversion", Some("0"));
     ini.setstr("core", "filemode", Some("false"));
     ini.setstr("core", "bare", Some("false"));
     ini
