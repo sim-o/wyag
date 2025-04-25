@@ -19,6 +19,7 @@ mod pack;
 mod packindex;
 mod repository;
 mod util;
+mod hashingreader;
 
 static LOGGER: SimpleLogger = SimpleLogger;
 

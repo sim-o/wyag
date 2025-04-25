@@ -2,10 +2,9 @@ use std::cmp::Ordering;
 use std::io;
 use std::io::{BufReader, Error, ErrorKind, Read};
 
+use crate::hashingreader::HashingReader;
 use hex::ToHex;
 use log::{debug, error, info, trace};
-use sha1::digest::core_api::CoreWrapper;
-use sha1::{Digest, Sha1, Sha1Core};
 
 pub struct PackIndex {
     fanout: [u32; 256],
@@ -15,35 +14,6 @@ pub struct PackIndex {
     offsets64: Vec<u64>,
     pack_sha1: [u8; 20],
     index_sha1: [u8; 20],
-}
-
-const INDEX_HEADER: &[u8; 4] = b"\xff\x74\x4f\x63";
-
-struct HashingReader<T: Read> {
-    hasher: CoreWrapper<Sha1Core>,
-    inner: BufReader<T>,
-}
-
-impl<T: Read> Read for HashingReader<T> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let res = self.inner.read(buf);
-        if let Ok(size) = res {
-            self.hasher.update(&buf[..size]);
-        }
-        res
-    }
-}
-
-impl<T: Read> HashingReader<T> {
-    fn new(inner: BufReader<T>) -> Self {
-        Self {
-            hasher: Sha1::new(),
-            inner,
-        }
-    }
-    pub fn finalize(&mut self) -> Option<[u8; 20]> {
-        self.hasher.finalize_reset().try_into().ok()
-    }
 }
 
 impl PackIndex {
@@ -127,13 +97,7 @@ fn check_header<T: Read>(reader: &mut HashingReader<T>) -> io::Result<()> {
     {
         let mut header = [0; 4];
         reader.read_exact(&mut header)?;
-        if !header
-            .iter()
-            .zip(INDEX_HEADER)
-            .map(|(&a, &b)| a == b)
-            .reduce(|acc, v| acc && v)
-            .unwrap_or(false)
-        {
+        if header != *b"\xff\x74\x4f\x63" {
             debug!("header {}", header.encode_hex::<String>());
             return Err(Error::from(ErrorKind::InvalidData));
         }
