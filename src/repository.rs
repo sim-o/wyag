@@ -5,9 +5,9 @@ use configparser::ini::Ini;
 use flate2::bufread::{ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
 use hex::{decode, ToHex};
-use log::{debug, error, trace};
+use log::{debug, trace};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::Seek;
 use std::rc::Rc;
 use std::{
@@ -22,6 +22,7 @@ use BinaryObject::{OffsetDelta, RefDelta};
 use crate::cli::CommandObjectType;
 use crate::gitobject::DeltaObject;
 use crate::gitobject::{BlobObject, GitObject};
+use crate::logiterator::LogIterator;
 use crate::pack::BinaryObject::{Blob, Commit, Tag, Tree};
 use crate::pack::{parse_object_data, BinaryObject, Pack};
 use crate::packindex::PackIndex;
@@ -543,52 +544,8 @@ impl Repository {
         Ok(())
     }
 
-    pub fn log(&self, sha1: [u8; 20]) -> Result<Vec<String>, Box<dyn Error>> {
-        let mut seen = HashSet::new();
-
-        let mut sha1 = sha1;
-        let mut result = Vec::new();
-        let mut depth: u32 = 1;
-        loop {
-            if !seen.insert(sha1) {
-                error!("looped on {}", sha1.encode_hex::<String>());
-                break;
-            }
-
-            debug!("depth: {} seen {}", depth, sha1.encode_hex::<String>());
-            let object = self.read_object(sha1)?;
-            match object {
-                GitObject::Commit(commit) => {
-                    result.push(
-                        format!(
-                            "{} {}: {}",
-                            sha1.encode_hex::<String>(),
-                            commit
-                                .author()
-                                .get(0)
-                                .unwrap_or(&"<<no author>>".to_string()),
-                            commit.message().unwrap_or("".to_string())
-                        )
-                            .replace("\n", " "),
-                    );
-                    if let Some(&next_sha1) = commit.parents().get(0) {
-                        trace!("ascending {}", next_sha1.encode_hex::<String>());
-                        sha1 = next_sha1;
-                    } else {
-                        debug!("breaking");
-                        break;
-                    }
-                }
-                _ => {
-                    error!("commit not at {}", sha1.encode_hex::<String>());
-                    Err("expected commit")?
-                }
-            }
-
-            depth += 1;
-        }
-
-        Ok(result)
+    pub fn log_iter(&self, sha1: [u8; 20]) -> LogIterator {
+        LogIterator::new(self, sha1)
     }
 }
 

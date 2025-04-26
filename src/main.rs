@@ -20,6 +20,7 @@ mod packindex;
 mod repository;
 mod util;
 mod hashingreader;
+mod logiterator;
 
 static LOGGER: SimpleLogger = SimpleLogger;
 
@@ -93,9 +94,8 @@ fn read_object(
 fn log(repository: PathBuf, name: String) -> Result<(), Box<dyn Error>> {
     let repo = Repository::find(&repository)?;
     let sha1 = repo.find_object(&name)?;
-    let obj = repo.log(sha1)?;
-    for msg in obj {
-        println!("{}", msg);
+    for msg in repo.log_iter(sha1) {
+        println!("{}", msg?);
     }
     Ok(())
 }
