@@ -1,11 +1,9 @@
-use std::error::Error;
-use std::io;
-use std::io::{BufReader, Read};
-
 use hex::ToHex;
 use log::debug;
 use sha1::digest::Update;
 use sha1::{Digest, Sha1};
+use std::io;
+use std::io::{BufReader, Read};
 
 use crate::pack::BinaryObject;
 
@@ -15,7 +13,7 @@ pub fn read_byte<T: Read>(reader: &mut BufReader<T>) -> io::Result<u8> {
     Ok(buf[0])
 }
 
-pub fn parse_variable_length<T: Read>(reader: &mut BufReader<T>) -> Result<usize, Box<dyn Error>> {
+pub fn parse_variable_length<T: Read>(reader: &mut BufReader<T>) -> anyhow::Result<usize> {
     let mut expanded: usize = 0;
     let mut shift = 0;
     loop {
@@ -29,7 +27,7 @@ pub fn parse_variable_length<T: Read>(reader: &mut BufReader<T>) -> Result<usize
     Ok(expanded)
 }
 
-pub fn parse_offset_delta<T: Read>(reader: &mut BufReader<T>) -> Result<u64, Box<dyn Error>> {
+pub fn parse_offset_delta<T: Read>(reader: &mut BufReader<T>) -> anyhow::Result<u64> {
     let mut b = read_byte(reader)?;
     let mut offset = b as u64 & 0x7f;
 
@@ -53,8 +51,18 @@ pub fn get_sha1(object_type: &BinaryObject, data: &[u8]) -> String {
     hasher.finalize().encode_hex()
 }
 
-pub fn validate_sha1(sha1: [u8; 20], object_type: &BinaryObject, data: &[u8]) {
+pub fn validate_sha1(
+    sha1: [u8; 20],
+    object_type: &BinaryObject,
+    data: &[u8],
+) -> anyhow::Result<()> {
     debug!("validating {} and len {}", object_type.name(), data.len());
     let result = get_sha1(object_type, data);
-    assert_eq!(result, sha1.encode_hex::<String>());
+    anyhow::ensure!(
+        result == sha1.encode_hex::<String>(),
+        "sha1 did not validate for object {} with type {}",
+        sha1.encode_hex::<String>(),
+        object_type.name()
+    );
+    Ok(())
 }

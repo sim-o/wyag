@@ -1,5 +1,15 @@
 extern crate sha1;
 
+use crate::cli::CommandObjectType;
+use crate::gitobject::{BlobObject, GitObject};
+use crate::gitobject::DeltaObject;
+use crate::logiterator::LogIterator;
+use crate::pack::BinaryObject::{Blob, Commit, Tag, Tree};
+use crate::pack::{parse_object_data, BinaryObject, Pack};
+use crate::packindex::PackIndex;
+use crate::repository::ObjectLocation::{ObjectFile, PackFile};
+use crate::util::{get_sha1, validate_sha1};
+use anyhow::{bail, ensure, Context, Result};
 use bytes::{Buf, BufMut};
 use configparser::ini::Ini;
 use flate2::bufread::{ZlibDecoder, ZlibEncoder};
@@ -10,24 +20,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::Seek;
 use std::rc::Rc;
-use std::{
-    error::Error,
-    fs::{create_dir_all, File},
-    io::{BufReader, BufWriter, Read, Write},
-    path::{Path, PathBuf},
-    str::from_utf8,
-};
+use std::{fs::{create_dir_all, File}, io, io::{BufReader, BufWriter, Read, Write}, path::{Path, PathBuf}, str::from_utf8};
 use BinaryObject::{OffsetDelta, RefDelta};
-
-use crate::cli::CommandObjectType;
-use crate::gitobject::DeltaObject;
-use crate::gitobject::{BlobObject, GitObject};
-use crate::logiterator::LogIterator;
-use crate::pack::BinaryObject::{Blob, Commit, Tag, Tree};
-use crate::pack::{parse_object_data, BinaryObject, Pack};
-use crate::packindex::PackIndex;
-use crate::repository::ObjectLocation::{ObjectFile, PackFile};
-use crate::util::{get_sha1, validate_sha1};
 
 type PackRef = Rc<RefCell<Pack<File>>>;
 
@@ -40,27 +34,33 @@ pub struct Repository {
 }
 
 impl Repository {
-    pub fn new(path: &Path, force: bool) -> Result<Self, Box<dyn Error>> {
+    pub fn new(path: &Path, force: bool) -> Result<Self> {
         let gitdir = path.join(".git");
         let config_file = gitdir.join("config");
 
         debug!("constructing repo");
 
         let conf = if config_file.is_file() {
-            let file = File::open(config_file)?;
-            let mut reader = BufReader::new(file);
-            let mut conf = Ini::new();
-            let mut config = String::new();
-            reader.read_to_string(&mut config)?;
-            conf.read(config)?;
+            let conf = {
+                let file = File::open(config_file).context("opening config file")?;
+                let mut reader = BufReader::new(file);
+
+                let mut conf = Ini::new();
+                let mut config = String::new();
+                reader
+                    .read_to_string(&mut config)
+                    .context("reading config file")?;
+                if let Err(e) = conf.read(config) {
+                    bail!("error parsing config contents: {}", e);
+                }
+                conf
+            };
 
             let vers = conf
                 .get("core", "repositoryformatversion")
-                .ok_or("version string does not exist".to_string())?;
+                .context("version string does not exist")?;
             let vers = vers.parse::<i32>()?;
-            if vers != 0 {
-                return Err(format!("Unsupported repositoryformatversion: {}", vers))?;
-            }
+            anyhow::ensure!(vers == 0, "Unsupported repositoryformatversion: {}", vers);
 
             Some(conf)
         } else {
@@ -68,7 +68,7 @@ impl Repository {
         };
 
         if conf.is_none() && !force {
-            return Err("config file does not exist".to_string())?;
+            bail!("config file does not exist");
         }
 
         trace!("constructed");
@@ -82,20 +82,22 @@ impl Repository {
         })
     }
 
-    pub fn find(orig: &Path) -> Result<Self, Box<dyn Error>> {
+    pub fn find(orig: &Path) -> Result<Self> {
         let mut path = if orig.is_absolute() {
             orig
         } else {
-            &std::env::current_dir()?.join(orig)
+            &std::env::current_dir()
+                .context("getting current dir")?
+                .join(orig)
         };
 
         while !path.join(".git").is_dir() {
             path = path
                 .parent()
-                .ok_or_else(|| format!("{} is not a repository!", orig.to_string_lossy()))?;
+                .with_context(|| format!("{} is not a repository!", orig.to_string_lossy()))?;
         }
 
-        Self::new(path, false)
+        Self::new(path, false).with_context(|| format!("loading repository at {}", path.to_string_lossy()))
     }
 
     /// Compute path under repo gitdir
@@ -121,36 +123,43 @@ impl Repository {
         Some(file_path)
     }
 
-    pub fn init(&self) -> Result<(), Box<dyn Error>> {
+    pub fn init(&self) -> Result<()> {
         if self.worktree.exists() {
-            if !self.worktree.is_dir() {
-                Err(format!(
-                    "{} is not a directory!",
-                    self.worktree.to_string_lossy()
-                ))?;
-            }
+            anyhow::ensure!(
+                self.worktree.is_dir(),
+                "{} is not a directory!",
+                self.worktree.to_string_lossy()
+            );
+
             if self.gitdir.exists() {
-                if !self.gitdir.is_dir() {
-                    Err(format!(
-                        "{} exists and is not a directory!",
-                        self.gitdir.to_string_lossy(),
-                    ))?;
-                }
-                if self.gitdir.read_dir()?.next().is_some() {
-                    Err(format!(
-                        "{} exists but is not empty!",
-                        self.gitdir.to_string_lossy()
-                    ))?;
-                }
+                anyhow::ensure!(
+                    self.gitdir.is_dir(),
+                    "{} exists and is not a directory!",
+                    self.gitdir.to_string_lossy(),
+                );
+                anyhow::ensure!(
+                    self.gitdir
+                        .read_dir()
+                        .with_context(|| format!(
+                            "reading contents at {}",
+                            self.gitdir.to_string_lossy()
+                        ))?
+                        .next()
+                        .is_none(),
+                    "{} exists but is not empty!",
+                    self.gitdir.to_string_lossy()
+                );
             }
         } else {
             debug!("Creating worktree: {}", self.worktree.to_string_lossy());
-            create_dir_all(&self.worktree)?;
+            create_dir_all(&self.worktree).with_context(|| {
+                format!("creating worktree at {}", self.worktree.to_string_lossy())
+            })?;
         }
 
         for p in ["branches", "objects", "refs/tags", "refs/heads"] {
             self.repo_mkdir(Path::new(p))
-                .ok_or(format!("could not create {} directory", p))?;
+                .with_context(|| format!("could not create {} directory", p))?;
         }
 
         let files = [
@@ -163,8 +172,11 @@ impl Repository {
         ];
 
         for (f, contents) in files {
-            let file = File::create_new(self.gitdir.join(f))?;
-            BufWriter::new(file).write_all(contents.as_bytes())?;
+            let file = File::create_new(self.gitdir.join(f))
+                .with_context(|| format!("creating file {}", f))?;
+            BufWriter::new(file)
+                .write_all(contents.as_bytes())
+                .with_context(|| format!("writing file contents {}", f))?;
         }
 
         Ok(())
@@ -173,13 +185,13 @@ impl Repository {
     fn read_object_file_data(
         &self,
         sha1: [u8; 20],
-    ) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
+    ) -> Result<(BinaryObject, Vec<u8>)> {
         let path = self
             .object_file_path(sha1)
-            .ok_or_else(|| format!("Could not load object {}", sha1.encode_hex::<String>()))?;
-        if !path.is_file() {
-            Err(format!("file {} does not exist", path.to_string_lossy()))?;
-        }
+            .with_context(|| format!("Could not load object {}", sha1.encode_hex::<String>()))?;
+        ensure!(path.is_file(),
+            "file {} does not exist", path.to_string_lossy()
+        );
 
         let mut file = File::open(path)?;
         let mut decoder = ZlibDecoder::new(BufReader::new(&mut file));
@@ -189,30 +201,30 @@ impl Repository {
         let type_idx = raw
             .iter()
             .position(|&b| b == b' ')
-            .ok_or("object corrupt: missing type")?;
+            .context("object corrupt: missing type")?;
 
         let size_idx = type_idx
             + raw
             .iter()
             .skip(type_idx)
             .position(|&b| b == b'\x00')
-            .ok_or("object corrupt: missing size")?;
+            .context("object corrupt: missing size")?;
 
         trace!("reading size...");
         let size = from_utf8(&raw[type_idx + 1..size_idx])?.parse::<usize>()?;
-        if size != raw.len() - size_idx - 1 {
-            Err(format!(
+        ensure!(size == raw.len() - size_idx - 1,
                 "object corrupt: size {} does not match expected {}",
                 size,
                 raw.len() - size_idx - 1,
-            ))?;
-        }
+            );
 
         let object_type = &raw[..type_idx];
         let data = raw[size_idx + 1..].to_vec();
         debug!(
             "type = '{}' size = {}",
-            from_utf8(object_type).unwrap(),
+            from_utf8(object_type)
+                .map(|b| b.to_string())
+                .unwrap_or_else(|_| format!("hex={}", object_type.encode_hex::<String>())),
             size
         );
 
@@ -227,7 +239,7 @@ impl Repository {
             ),
         };
 
-        validate_sha1(sha1, &object_type, &data);
+        validate_sha1(sha1, &object_type, &data).context("validating object sha1")?;
         Ok((object_type, data))
     }
 
@@ -237,9 +249,9 @@ impl Repository {
         self.repo_file(&path, false)
     }
 
-    pub fn read_object(&self, sha1: [u8; 20]) -> Result<GitObject, Box<dyn Error>> {
-        let (object_type, data) = self.read_object_data(sha1)?;
-        parse_object_data(object_type, data)
+    pub fn read_object(&self, sha1: [u8; 20]) -> Result<GitObject> {
+        let (object_type, data) = self.read_object_data(sha1).context("reading object")?;
+        parse_object_data(object_type, data).context("reading object")
     }
 
     fn find_object_location(&self, sha1: [u8; 20]) -> Option<ObjectLocation> {
@@ -285,7 +297,7 @@ impl Repository {
         None
     }
 
-    fn open_index(&self, path: &Path) -> Result<Rc<PackIndex>, Box<dyn Error>> {
+    fn open_index(&self, path: &Path) -> Result<Rc<PackIndex>> {
         if let Some(cached) = self.index_cache.borrow().get(path) {
             return Ok(cached.clone());
         }
@@ -298,14 +310,14 @@ impl Repository {
         Ok(index)
     }
 
-    fn read_object_data(&self, sha1: [u8; 20]) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
+    fn read_object_data(&self, sha1: [u8; 20]) -> Result<(BinaryObject, Vec<u8>)> {
         let location = self
             .find_object_location(sha1)
-            .ok_or("Failed to find object")?;
-        self.read_object_from_location(sha1, &location)
+            .context("Failed to find object")?;
+        self.read_object_from_location(sha1, &location).context("reading object from location")
     }
 
-    fn open_pack(&self, id: [u8; 20]) -> Result<Rc<RefCell<Pack<File>>>, Box<dyn Error>> {
+    fn open_pack(&self, id: [u8; 20]) -> Result<Rc<RefCell<Pack<File>>>> {
         let value = {
             let cache = self.pack_cache.borrow();
             cache.get(&id).cloned()
@@ -316,7 +328,7 @@ impl Repository {
                 let packfile_path = Path::new("objects").join("pack").join(packfile_name);
                 let pack = match self.repo_file(&packfile_path, false) {
                     Some(packfile_path) => Pack::new(BufReader::new(File::open(packfile_path)?))?,
-                    None => Err("Failed to load packfile")?,
+                    None => bail!("Failed to load packfile"),
                 };
                 let pack = Rc::new(RefCell::new(pack));
                 self.pack_cache.borrow_mut().insert(id, pack.clone());
@@ -331,7 +343,7 @@ impl Repository {
         &self,
         sha1: [u8; 20],
         location: &ObjectLocation,
-    ) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
+    ) -> Result<(BinaryObject, Vec<u8>)> {
         match location {
             ObjectFile => self.read_object_file_data(sha1),
             PackFile(pack, offset) => {
@@ -340,7 +352,12 @@ impl Repository {
                 let (object_type, data) = packfile.read_object_data_at(*offset)?;
                 let (object_type, data) =
                     self.unpack_delta(&mut packfile, *offset, object_type, data)?;
-                validate_sha1(sha1, &object_type, &data);
+                validate_sha1(sha1, &object_type, &data).with_context(|| format!(
+                    "reading {} from pack {} at {}",
+                    sha1.encode_hex::<String>(),
+                    pack.encode_hex::<String>(),
+                    *offset
+                ))?;
                 Ok((object_type, data))
             }
         }
@@ -352,7 +369,7 @@ impl Repository {
         offset: u64,
         object_type: BinaryObject,
         data: Vec<u8>,
-    ) -> Result<(BinaryObject, Vec<u8>), Box<dyn Error>> {
+    ) -> Result<(BinaryObject, Vec<u8>)> {
         trace!("unpacking delta");
         let data = match object_type {
             Blob | Commit | Tag | Tree => (object_type, data),
@@ -373,13 +390,14 @@ impl Repository {
             RefDelta(reference) => {
                 let location = self
                     .find_object_location(reference)
-                    .ok_or("reference not found")?;
+                    .context("reference not found")?;
                 let (next_object_type, next_data) =
-                    self.read_object_from_location(reference, &location)?;
+                    self.read_object_from_location(reference, &location)
+                        .with_context(|| format!("unpacking ref delta reference {}", reference.encode_hex::<String>()))?;
                 let (next_object_type, next_data) = match location {
-                    ObjectFile => self.unpack_delta(packfile, 0, next_object_type, next_data)?,
+                    ObjectFile => self.unpack_delta(packfile, 0, next_object_type, next_data).context("unpacking delta from object file")?,
                     PackFile(pack, offset) => {
-                        let rc = self.open_pack(pack)?;
+                        let rc = self.open_pack(pack).context("found ref delta ")?;
                         let mut next_pack = rc.borrow_mut();
                         self.unpack_delta(&mut next_pack, offset, next_object_type, next_data)?
                     }
@@ -394,7 +412,7 @@ impl Repository {
         Ok(data)
     }
 
-    pub fn find_object(&self, name: &str) -> Result<[u8; 20], Box<dyn Error>> {
+    pub fn find_object(&self, name: &str) -> Result<[u8; 20]> {
         if let Some(hash) = decode(name).ok() {
             if let Ok(hash) = hash.try_into() {
                 return Ok(hash);
@@ -411,23 +429,23 @@ impl Repository {
                 } else {
                     let sha1_decode: Result<[u8; 20], _> = match decode(&ref_contents) {
                         Ok(sha1) => sha1.try_into(),
-                        _ => Err(format!(
+                        _ => bail!(
                             "Failed to decode reference file contents: '{}'",
                             ref_contents
-                        ))?,
+                        ),
                     };
                     match sha1_decode {
                         Ok(result) => Ok(result),
-                        _ => Err("sha1 has incorrect length")?,
+                        _ => bail!("sha1 has incorrect length"),
                     }
                 };
             }
         }
 
-        Err(format!("reference does not exist: {}", name))?
+        bail!("reference does not exist: {}", name)
     }
 
-    pub fn write_object(&self, obj: &GitObject, write: bool) -> Result<String, Box<dyn Error>> {
+    pub fn write_object(&self, obj: &GitObject, write: bool) -> Result<String> {
         let bytes = {
             let serialized = obj.serialize();
             let mut writer = Vec::new().writer();
@@ -447,18 +465,11 @@ impl Repository {
                     &Path::new("objects").join(&sha1[..2]).join(&sha1[2..]),
                     true,
                 )
-                .ok_or(format!("could not create object: {}", sha1))?;
+                .with_context(|| format!("could not create object: {}", sha1))?;
 
-            let compressed = {
-                let mut encoder = ZlibEncoder::new(bytes.reader(), Compression::default());
-                let mut compressed = Vec::new();
-                encoder.read_to_end(&mut compressed)?;
-                compressed
-            };
-
-            let mut object =
-                BufWriter::new(File::open(file).or(Err("Failed to open object file"))?);
-            object.write_all(&compressed)?;
+            let mut object = BufWriter::new(File::open(file).context("opening object file")?);
+            let mut encoder = ZlibEncoder::new(bytes.reader(), Compression::default());
+            io::copy(&mut encoder, &mut object).context("copying compressed data to object file")?;
         }
 
         Ok(sha1)
@@ -469,7 +480,7 @@ impl Repository {
         path: &Path,
         object_type: CommandObjectType,
         write: bool,
-    ) -> Result<String, Box<dyn Error>> {
+    ) -> Result<String> {
         let data = {
             let mut file = File::open(path)?;
             let mut buf = Vec::new();
@@ -485,7 +496,7 @@ impl Repository {
         self.write_object(&obj, write)
     }
 
-    pub fn read_packfile(&self, packfile_sha: &str) -> Result<Vec<GitObject>, Box<dyn Error>> {
+    pub fn read_packfile(&self, packfile_sha: &str) -> Result<Vec<GitObject>> {
         let path = self
             .repo_file(
                 &Path::new("objects")
@@ -493,7 +504,7 @@ impl Repository {
                     .join(format!("pack-{}.pack", packfile_sha)),
                 false,
             )
-            .ok_or("Packfile does not exist")?;
+            .context("Packfile does not exist")?;
 
         let reader = BufReader::new(File::open(path)?);
         Pack::new(reader)?.read()
@@ -504,23 +515,23 @@ impl Repository {
         reference: &str,
         recurse: bool,
         path: &Path,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<()> {
         trace!("finding object {}", reference);
         let sha1 = self.find_object(reference)?;
         trace!("reading object {}", sha1.encode_hex::<String>());
         let object = match self.read_object(sha1)? {
             GitObject::Tree(tree) => tree,
-            _ => Err("object not a tree")?,
+            _ => bail!("object not a tree"),
         };
 
         trace!("iterating leaf {}", path.to_string_lossy());
 
-        object.for_each_leaf(|item| {
+        for item in object.leaf_iter() {
             let _type = match &item.mode[..2] {
                 "04" => "tree",
                 "10" | "12" => "blob",
                 "16" => "commit",
-                _ => panic!("weird TreeLeaf mode {}", &item.mode[..2]),
+                _ => bail!("weird TreeLeaf mode {} on {}", &item.mode[..2], item.path.to_string_lossy()),
             };
 
             if recurse && _type == "tree" {
@@ -529,7 +540,7 @@ impl Repository {
                     recurse,
                     &path.join(&item.path),
                 )
-                    .expect("Failed to descend tree");
+                    .with_context(|| format!("Failed to descend tree in {}", item.path.to_string_lossy()))?;
             } else {
                 trace!(
                     "{} {} {} {}",
@@ -539,7 +550,7 @@ impl Repository {
                     path.join(&item.path).to_string_lossy()
                 );
             }
-        });
+        };
 
         Ok(())
     }

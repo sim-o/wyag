@@ -1,10 +1,10 @@
+use crate::hashingreader::HashingReader;
+use anyhow::Context;
+use hex::ToHex;
+use log::{debug, error, info, trace};
 use std::cmp::Ordering;
 use std::io;
 use std::io::{BufReader, Error, ErrorKind, Read};
-
-use crate::hashingreader::HashingReader;
-use hex::ToHex;
-use log::{debug, error, info, trace};
 
 pub struct PackIndex {
     fanout: [u32; 256],
@@ -17,23 +17,21 @@ pub struct PackIndex {
 }
 
 impl PackIndex {
-    pub fn new<T: Read>(
-        reader: BufReader<T>,
-    ) -> Result<PackIndex, Box<dyn std::error::Error>> {
+    pub fn new<T: Read>(reader: BufReader<T>) -> anyhow::Result<PackIndex> {
         let mut reader = HashingReader::new(reader);
 
         check_header(&mut reader)?;
-        let fanout: [u32; 256] = read_n_u32be(&mut reader, 256)?.try_into().unwrap();
-        let hashes = read_hashes(&mut reader, fanout[255] as usize)?;
-        let crc32 = read_n_u32be(&mut reader, fanout[255] as usize)?;
-        let offsets = read_n_u32be(&mut reader, fanout[255] as usize)?;
+        let fanout: [u32; 256] = read_n_u32be(&mut reader, 256).context("reading fanout table")?.try_into().unwrap();
+        let hashes = read_hashes(&mut reader, fanout[255] as usize).context("reading hashes")?;
+        let crc32 = read_n_u32be(&mut reader, fanout[255] as usize).context("reading crc32 table")?;
+        let offsets = read_n_u32be(&mut reader, fanout[255] as usize).context("reading offsets table")?;
         let offsets64 = read_n_u64be(
             &mut reader,
             offsets.iter().filter(|&n| n & 0x8000_0000 != 0).count(),
-        )?;
-        let pack_sha1 = read_hash(&mut reader)?;
+        ).context("reading 64 bit offsets table")?;
+        let pack_sha1 = read_hash(&mut reader).context("reading pack sha1")?;
         let actual_index_sha1 = reader.finalize();
-        let index_sha1 = read_hash(&mut reader)?;
+        let index_sha1 = read_hash(&mut reader).context("reading index sha1")?;
 
         info!(
             "pack sha: {}, index sha: {}, actual index sha: {}",
@@ -110,13 +108,16 @@ fn check_header<T: Read>(reader: &mut HashingReader<T>) -> io::Result<()> {
     Ok(())
 }
 
-fn read_hash<T: Read>(reader: &mut HashingReader<T>) -> Result<[u8; 20], Error> {
+fn read_hash<T: Read>(reader: &mut HashingReader<T>) -> io::Result<[u8; 20]> {
     let mut hash = vec![0; 20];
     reader.read_exact(&mut hash)?;
     Ok(hash.try_into().unwrap())
 }
 
-fn read_hashes<T: Read>(reader: &mut HashingReader<T>, items: usize) -> Result<Vec<[u8; 20]>, Error> {
+fn read_hashes<T: Read>(
+    reader: &mut HashingReader<T>,
+    items: usize,
+) -> io::Result<Vec<[u8; 20]>> {
     let hashes = {
         let mut hashes = vec![0; 20 * items];
         reader.read_exact(&mut hashes)?;
@@ -128,7 +129,7 @@ fn read_hashes<T: Read>(reader: &mut HashingReader<T>, items: usize) -> Result<V
     Ok(hashes)
 }
 
-fn read_n_u32be<T: Read>(reader: &mut HashingReader<T>, n: usize) -> Result<Vec<u32>, Error> {
+fn read_n_u32be<T: Read>(reader: &mut HashingReader<T>, n: usize) -> io::Result<Vec<u32>> {
     let mut buf = vec![0; size_of::<u32>() * n];
     reader.read_exact(&mut buf)?;
     Ok(buf
@@ -140,7 +141,7 @@ fn read_n_u32be<T: Read>(reader: &mut HashingReader<T>, n: usize) -> Result<Vec<
         .collect::<Vec<u32>>())
 }
 
-fn read_n_u64be<T: Read>(reader: &mut HashingReader<T>, n: usize) -> Result<Vec<u64>, Error> {
+fn read_n_u64be<T: Read>(reader: &mut HashingReader<T>, n: usize) -> io::Result<Vec<u64>> {
     let mut buf = vec![0; size_of::<u64>() * n];
     reader.read_exact(&mut buf)?;
     Ok(buf

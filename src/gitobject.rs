@@ -1,6 +1,7 @@
 use crate::kvlm::{kvlm_parse, kvlm_serialize};
 use crate::pack::BinaryObject;
 use crate::util::{parse_variable_length, read_byte};
+use anyhow::Context;
 use bytes::Buf;
 use hex::{decode, ToHex};
 use log::debug;
@@ -8,8 +9,6 @@ use ordered_hash_map::OrderedHashMap;
 use std::io::{BufReader, ErrorKind, Read};
 use std::ops::Deref;
 use std::{
-    cell::RefCell,
-    error::Error,
     fmt::{Debug, Display},
     path::PathBuf,
     str::from_utf8,
@@ -109,14 +108,11 @@ pub struct CommitObject {
 
 impl CommitObject {
     fn get(&self, name: &str) -> impl Iterator<Item=String> {
-        self.kvlm
-            .get(name)
-            .into_iter()
-            .flat_map(|a| {
-                a.first()
-                    .into_iter()
-                    .flat_map(|v| from_utf8(v).map(|v| v.to_string()))
-            })
+        self.kvlm.get(name).into_iter().flat_map(|a| {
+            a.first()
+                .into_iter()
+                .flat_map(|v| from_utf8(v).map(|v| v.to_string()))
+        })
     }
 
     pub fn author(&self) -> Vec<String> {
@@ -134,12 +130,12 @@ impl CommitObject {
             .collect()
     }
 
-    pub fn from(data: &[u8]) -> Result<Self, Box<dyn Error>> {
+    pub fn from(data: &[u8]) -> anyhow::Result<Self> {
         Ok(Self {
-            kvlm: kvlm_parse(data)?,
+            kvlm: kvlm_parse(data).context("Failed to parse commit kvlm")?,
         })
     }
-    
+
     pub fn serialize(&self) -> Vec<u8> {
         kvlm_serialize(&self.kvlm)
     }
@@ -151,7 +147,7 @@ pub struct TagObject {
 }
 
 impl TagObject {
-    pub fn from(data: &[u8]) -> Result<Self, Box<dyn Error>> {
+    pub fn from(data: &[u8]) -> anyhow::Result<Self> {
         Ok(Self {
             kvlm: kvlm_parse(data)?,
         })
@@ -163,36 +159,33 @@ impl TagObject {
 
 #[derive(Debug)]
 pub struct TreeObject {
-    leaves: RefCell<Vec<TreeLeaf>>,
+    leaves: Vec<TreeLeaf>,
 }
 
 impl TreeObject {
-    pub fn from(data: &[u8]) -> Result<TreeObject, Box<dyn Error>> {
+    pub fn new(data: &[u8]) -> anyhow::Result<TreeObject> {
         debug!("reading tree len: {}", data.len());
         let mut leaves = Vec::new();
 
         let mut rem = data;
         while !rem.is_empty() {
-            let (leaf, len) = TreeLeaf::parse_one(rem)?;
+            let (leaf, len) = TreeLeaf::parse_one(rem).context("parsing tree leaf")?;
             debug!("treeleef read: {}, len: {len}", leaf.path.to_string_lossy());
             leaves.push(leaf);
             rem = &rem[len..];
         }
         Ok(Self {
-            leaves: RefCell::new(leaves),
+            leaves,
         })
     }
 
-    pub fn for_each_leaf(&self, f: impl Fn(&TreeLeaf)) {
-        self.leaves.borrow().iter().for_each(f);
+    pub fn leaf_iter(&self) -> impl Iterator<Item=&TreeLeaf> {
+        self.leaves.iter()
     }
 
     fn serialize(&self) -> Vec<u8> {
-        {
-            self.leaves.borrow_mut().sort();
-        }
+        // todo ensure leaves sorted by path
         self.leaves
-            .borrow()
             .iter()
             .flat_map(|l| l.serialize())
             .collect::<Vec<u8>>()
@@ -228,14 +221,16 @@ impl Debug for TreeLeaf {
 }
 
 impl TreeLeaf {
-    fn parse_one(data: &[u8]) -> Result<(Self, usize), Box<dyn Error>> {
+    fn parse_one(data: &[u8]) -> anyhow::Result<(Self, usize)> {
         let x = data
             .iter()
             .position(|&b| b == b' ')
-            .ok_or("tree leaf does not contain space")?;
-        assert!(x == 5 || x == 6, "tree leaf mode length incorrect");
+            .context("tree leaf does not contain space")?;
+        anyhow::ensure!(x == 5 || x == 6, "tree leaf mode length incorrect");
 
-        let mut mode = from_utf8(&data[..x])?.to_string();
+        let mut mode = from_utf8(&data[..x])
+            .context("converting mode to utf-8")?
+            .to_string();
         if mode.len() == 5 {
             mode.insert(0, '0');
         }
@@ -244,11 +239,9 @@ impl TreeLeaf {
             .iter()
             .skip(x)
             .position(|&b| b == b'\0')
-            .ok_or("tree leaf does not contain null")?;
+            .context("tree leaf does not contain null")?;
         let path = PathBuf::from(from_utf8(&data[x + 1..y])?);
-        if data.len() < y + 21 {
-            Err("tree leaf truncated in sha1")?;
-        }
+        anyhow::ensure!(data.len() >= y + 21, "tree leaf truncated in sha1");
         let sha1 = data[y + 1..y + 21].to_vec();
 
         Ok((TreeLeaf { mode, path, sha1 }, y + 21))
@@ -291,7 +284,7 @@ pub struct RefDeltaObject {
 }
 
 impl DeltaObject {
-    pub fn from(data: &Vec<u8>) -> Result<Self, Box<dyn Error>> {
+    pub fn from(data: &Vec<u8>) -> anyhow::Result<Self> {
         parse_delta_data(data)
     }
 
@@ -312,19 +305,19 @@ impl DeltaObject {
 }
 
 impl OffsetDeltaObject {
-    pub fn new(offset: u64, data: &Vec<u8>) -> Result<Self, Box<dyn Error>> {
+    pub fn new(offset: u64, data: &Vec<u8>) -> anyhow::Result<Self> {
         Ok(Self {
             offset,
-            delta: DeltaObject::from(data)?,
+            delta: DeltaObject::from(data).context("parsing offset delta object")?,
         })
     }
 }
 
 impl RefDeltaObject {
-    pub fn new(reference: [u8; 20], data: &Vec<u8>) -> Result<Self, Box<dyn Error>> {
+    pub fn new(reference: [u8; 20], data: &Vec<u8>) -> anyhow::Result<Self> {
         Ok(Self {
             reference,
-            delta: parse_delta_data(data)?,
+            delta: parse_delta_data(data).context("parsing ref delta object")?,
         })
     }
 }
@@ -332,7 +325,7 @@ impl RefDeltaObject {
 fn parse_copy_instruction<T: Read>(
     opcode: u8,
     reader: &mut BufReader<T>,
-) -> Result<DeltaInstruction, Box<dyn Error>> {
+) -> anyhow::Result<DeltaInstruction> {
     let cp_off: usize = {
         let mut cp_off: usize = 0;
         for i in 0..4 {
@@ -389,10 +382,10 @@ impl Display for DeltaInstruction {
     }
 }
 
-fn parse_delta_data(reader: &[u8]) -> Result<DeltaObject, Box<dyn Error>> {
+fn parse_delta_data(reader: &[u8]) -> anyhow::Result<DeltaObject> {
     let mut reader = BufReader::new(reader.reader());
-    let base_size = parse_variable_length(&mut reader)?;
-    let expanded_size = parse_variable_length(&mut reader)?;
+    let base_size = parse_variable_length(&mut reader).context("reading base size")?;
+    let expanded_size = parse_variable_length(&mut reader).context("reading expanded size")?;
 
     let mut instructions = Vec::new();
     loop {
@@ -402,22 +395,20 @@ fn parse_delta_data(reader: &[u8]) -> Result<DeltaObject, Box<dyn Error>> {
                 if err.kind() == ErrorKind::UnexpectedEof {
                     break;
                 }
-                panic!("unexpected read error: {}", err);
+                anyhow::bail!("unexpected read error: {}", err);
             }
             Ok(opcode) => {
-                if opcode == 0 {
-                    panic!("invalid delta opcode 0");
-                }
-
+                anyhow::ensure!(opcode != 0, "invalid delta opcode 0");
                 let instr = if opcode & 0x80 == 0 {
                     let data = {
                         let mut buf = vec![0; opcode as usize];
-                        reader.read_exact(&mut buf)?;
+                        reader.read_exact(&mut buf).context("reading insert data")?;
                         buf
                     };
                     DeltaInstruction::Insert(data)
                 } else {
-                    parse_copy_instruction(opcode, &mut reader)?
+                    parse_copy_instruction(opcode, &mut reader)
+                        .context("reading copy instruction")?
                 };
 
                 instructions.push(instr);
@@ -447,10 +438,10 @@ mod test {
         let mut buf = Vec::new();
         f.read_to_end(&mut buf).unwrap();
         let skip = buf.iter().position(|&b| b == b'\0').unwrap_or(0) + 1;
-        let tree = TreeObject::from(&buf[skip..]).unwrap();
+        let tree = TreeObject::new(&buf[skip..]).unwrap();
 
         assert_eq!(
-            tree.leaves.borrow()[0],
+            tree.leaves[0],
             TreeLeaf {
                 path: PathBuf::from(".github"),
                 mode: "040000".to_string(),

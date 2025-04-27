@@ -25,7 +25,7 @@ impl<T: Read> HashingReader<T> {
             inner,
         }
     }
-    
+
     pub fn finalize(&mut self) -> [u8; 20] {
         self.hasher.finalize_reset().into()
     }

@@ -1,9 +1,9 @@
 use crate::gitobject::GitObject;
 use crate::repository::Repository;
+use anyhow::Context;
 use hex::ToHex;
 use log::{debug, error, trace};
 use std::collections::HashSet;
-use std::error::Error;
 
 pub struct LogIterator<'a> {
     repository: &'a Repository,
@@ -22,14 +22,18 @@ impl<'a> LogIterator<'a> {
 }
 
 impl<'a> Iterator for LogIterator<'a> {
-    type Item = Result<String, Box<dyn Error>>;
+    type Item = anyhow::Result<String>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if !self.seen.insert(self.current) {
             return None;
         }
 
-        let object = match self.repository.read_object(self.current) {
+        let object = match self
+            .repository
+            .read_object(self.current)
+            .context("iterating logs")
+        {
             Ok(object) => object,
             Err(e) => return Some(Err(e)),
         };
@@ -45,7 +49,7 @@ impl<'a> Iterator for LogIterator<'a> {
                         .unwrap_or(&"<<no author>>".to_string()),
                     commit.message().unwrap_or("".to_string())
                 )
-                    .replace("\n", " ");
+                .replace("\n", " ");
 
                 if let Some(&next_sha1) = commit.parents().first() {
                     trace!("ascending {}", next_sha1.encode_hex::<String>());
@@ -59,7 +63,8 @@ impl<'a> Iterator for LogIterator<'a> {
             }
             _ => {
                 error!("commit not at {}", self.current.encode_hex::<String>());
-                Some(Err("expected commit".into()))
+                let error1 = anyhow::anyhow!("expected commit");
+                Some(error1.downcast())
             }
         }
     }

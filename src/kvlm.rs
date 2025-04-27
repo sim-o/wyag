@@ -1,17 +1,18 @@
-use std::{error::Error, str::from_utf8};
-
+use anyhow::Context;
+use hex::ToHex;
 use ordered_hash_map::OrderedHashMap;
+use std::str::from_utf8;
 
-pub fn kvlm_parse(raw: &[u8]) -> Result<OrderedHashMap<String, Vec<Vec<u8>>>, Box<dyn Error>> {
+pub fn kvlm_parse(raw: &[u8]) -> anyhow::Result<OrderedHashMap<String, Vec<Vec<u8>>>> {
     let mut map = OrderedHashMap::new();
-    kvlm_parse_rec(raw, &mut map)?;
+    kvlm_parse_rec(raw, &mut map).context("parsing kvlm")?;
     Ok(map)
 }
 
 fn kvlm_parse_rec(
     raw: &[u8],
     map: &mut OrderedHashMap<String, Vec<Vec<u8>>>,
-) -> Result<(), Box<dyn Error>> {
+) -> anyhow::Result<()> {
     if raw.is_empty() {
         return Ok(());
     }
@@ -40,7 +41,9 @@ fn kvlm_parse_rec(
         }
     }
 
-    let key = from_utf8(key)?.to_string();
+    let key = from_utf8(key)
+        .with_context(|| format!("parsing key '{}'", key.encode_hex::<String>()))?
+        .to_string();
     if let Some(v) = map.get_mut(&key) {
         v.push(kvlm_clean_value(raw[spc + 1..end].to_vec()));
     } else {
@@ -199,8 +202,14 @@ Q52UWybBzpaP9HEd4XnR+HuQ4k2K0ns2KgNImsNvIyFwbpMUyUWLMPimaV1DWUXo
     }
 
     fn assert_bytes_eq(actual: Option<&Vec<Vec<u8>>>, expected: Vec<Vec<u8>>, msg: &str) {
-        assert!(actual.is_some(), "{}: {}", msg, "value does not exist in map");
-        actual.unwrap()
+        assert!(
+            actual.is_some(),
+            "{}: {}",
+            msg,
+            "value does not exist in map"
+        );
+        actual
+            .unwrap()
             .iter()
             .zip(expected)
             .for_each(|(actual, expected)| {
