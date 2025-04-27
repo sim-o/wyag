@@ -13,7 +13,7 @@ pub fn read_byte<T: Read>(reader: &mut BufReader<T>) -> io::Result<u8> {
     Ok(buf[0])
 }
 
-pub fn parse_variable_length<T: Read>(reader: &mut BufReader<T>) -> anyhow::Result<usize> {
+pub fn parse_variable_length<T: Read>(reader: &mut BufReader<T>) -> io::Result<usize> {
     let mut expanded: usize = 0;
     let mut shift = 0;
     loop {
@@ -27,7 +27,7 @@ pub fn parse_variable_length<T: Read>(reader: &mut BufReader<T>) -> anyhow::Resu
     Ok(expanded)
 }
 
-pub fn parse_offset_delta<T: Read>(reader: &mut BufReader<T>) -> anyhow::Result<u64> {
+pub fn parse_offset_delta<T: Read>(reader: &mut BufReader<T>) -> io::Result<u64> {
     let mut b = read_byte(reader)?;
     let mut offset = b as u64 & 0x7f;
 

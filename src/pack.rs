@@ -3,8 +3,8 @@ extern crate sha1;
 use anyhow::{Context, Result};
 use flate2::bufread::ZlibDecoder;
 use log::{debug, warn};
-use std::io::{Seek, SeekFrom};
 use std::io::{BufReader, Read};
+use std::io::{Seek, SeekFrom};
 use GitObject::{Tag, Tree};
 
 use crate::gitobject::GitObject::{Blob, Commit, OffsetDelta, RefDelta};
@@ -27,7 +27,7 @@ impl<T: Read + Seek> Pack<T> {
         self.reader
             .seek(SeekFrom::Start(offset))
             .context("seek offset in packfile")?;
-        Ok(self.read_object()?)
+        self.read_object().context("reading object")
     }
 
     pub fn read(&mut self) -> Result<Vec<GitObject>> {

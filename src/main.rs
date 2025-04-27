@@ -61,14 +61,19 @@ fn main() {
 }
 
 fn ls_pack(path: &Path, packfile: String) -> anyhow::Result<()> {
-    let repository = Repository::find(path)?;
-    let objects = repository.read_packfile(&packfile)?;
-    objects.iter().for_each(|o| println!("object: {}", o));
+    let repository = Repository::find(path)
+        .with_context(|| format!("loading repository at {}", path.to_string_lossy()))?;
+    let objects = repository.read_packfile(&packfile)
+        .with_context(|| format!("reading packfile {}", packfile))?;
+    for o in objects.iter() {
+        println!("object: {}", o);
+    }
     Ok(())
 }
 
 fn ls_tree(path: &Path, tree: String, recurse: bool) -> anyhow::Result<()> {
-    let repo = Repository::find(path)?;
+    let repo = Repository::find(path)
+        .context("loading repository")?;
     repo.ls_tree(&tree, recurse, Path::new("."))
         .context("reading tree")
 }
@@ -78,7 +83,7 @@ fn hash_object(_type: CommandObjectType, file: PathBuf, write: bool) -> anyhow::
     let sha1 = repo
         .object_hash(&file, _type, write)
         .context("hashing file")?;
-    println!("{}", sha1);
+    println!("{}", sha1.encode_hex::<String>());
     Ok(())
 }
 

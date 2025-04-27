@@ -1,11 +1,11 @@
 use sha1::digest::core_api::CoreWrapper;
 use sha1::{Digest, Sha1, Sha1Core};
 use std::io;
-use std::io::{BufReader, Read};
+use std::io::Read;
 
 pub struct HashingReader<T: Read> {
     hasher: CoreWrapper<Sha1Core>,
-    inner: BufReader<T>,
+    inner: T,
 }
 
 impl<T: Read> Read for HashingReader<T> {
@@ -19,7 +19,7 @@ impl<T: Read> Read for HashingReader<T> {
 }
 
 impl<T: Read> HashingReader<T> {
-    pub fn new(inner: BufReader<T>) -> Self {
+    pub fn new(inner: T) -> Self {
         Self {
             hasher: Sha1::new(),
             inner,

@@ -1,10 +1,10 @@
 use crate::hashingreader::HashingReader;
-use anyhow::Context;
+use anyhow::{bail, ensure, Context};
 use hex::ToHex;
-use log::{debug, error, info, trace};
+use log::{debug, info, trace};
 use std::cmp::Ordering;
 use std::io;
-use std::io::{BufReader, Error, ErrorKind, Read};
+use std::io::{BufReader, Read};
 
 pub struct PackIndex {
     fanout: [u32; 256],
@@ -20,7 +20,7 @@ impl PackIndex {
     pub fn new<T: Read>(reader: BufReader<T>) -> anyhow::Result<PackIndex> {
         let mut reader = HashingReader::new(reader);
 
-        check_header(&mut reader)?;
+        check_header(&mut reader).context("check header")?;
         let fanout: [u32; 256] = read_n_u32be(&mut reader, 256).context("reading fanout table")?.try_into().unwrap();
         let hashes = read_hashes(&mut reader, fanout[255] as usize).context("reading hashes")?;
         let crc32 = read_n_u32be(&mut reader, fanout[255] as usize).context("reading crc32 table")?;
@@ -88,21 +88,18 @@ impl PackIndex {
     }
 }
 
-fn check_header<T: Read>(reader: &mut HashingReader<T>) -> io::Result<()> {
+fn check_header<T: Read>(reader: &mut HashingReader<T>) -> anyhow::Result<()> {
     {
         let mut header = [0; 4];
-        reader.read_exact(&mut header)?;
+        reader.read_exact(&mut header).context("reading header")?;
         if header != *b"\xff\x74\x4f\x63" {
             debug!("header {}", header.encode_hex::<String>());
-            return Err(Error::from(ErrorKind::InvalidData));
+            bail!("invalid header");
         }
 
-        reader.read_exact(&mut header)?;
+        reader.read_exact(&mut header).context("reading header version")?;
         let version = u32::from_be_bytes(header);
-        if version != 2 {
-            error!("invalid version {}", version);
-            return Err(Error::from(ErrorKind::InvalidData));
-        }
+        ensure!(version == 2, "only version 2 supported, pack index is {version}");
     }
     trace!("read header");
     Ok(())

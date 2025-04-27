@@ -8,11 +8,7 @@ use log::debug;
 use ordered_hash_map::OrderedHashMap;
 use std::io::{BufReader, ErrorKind, Read};
 use std::ops::Deref;
-use std::{
-    fmt::{Debug, Display},
-    path::PathBuf,
-    str::from_utf8,
-};
+use std::{fmt::{Debug, Display}, io, path::PathBuf, str::from_utf8};
 
 #[derive(Debug)]
 pub enum GitObject {
@@ -149,7 +145,7 @@ pub struct TagObject {
 impl TagObject {
     pub fn from(data: &[u8]) -> anyhow::Result<Self> {
         Ok(Self {
-            kvlm: kvlm_parse(data)?,
+            kvlm: kvlm_parse(data).context("parsing tag object")?,
         })
     }
     pub fn serialize(&self) -> Vec<u8> {
@@ -185,6 +181,7 @@ impl TreeObject {
 
     fn serialize(&self) -> Vec<u8> {
         // todo ensure leaves sorted by path
+        // see git tree.c write_index_as_tree for sorting rules
         self.leaves
             .iter()
             .flat_map(|l| l.serialize())
@@ -240,7 +237,7 @@ impl TreeLeaf {
             .skip(x)
             .position(|&b| b == b'\0')
             .context("tree leaf does not contain null")?;
-        let path = PathBuf::from(from_utf8(&data[x + 1..y])?);
+        let path = PathBuf::from(from_utf8(&data[x + 1..y]).context("leaf path is not utf8")?);
         anyhow::ensure!(data.len() >= y + 21, "tree leaf truncated in sha1");
         let sha1 = data[y + 1..y + 21].to_vec();
 
@@ -325,7 +322,7 @@ impl RefDeltaObject {
 fn parse_copy_instruction<T: Read>(
     opcode: u8,
     reader: &mut BufReader<T>,
-) -> anyhow::Result<DeltaInstruction> {
+) -> io::Result<DeltaInstruction> {
     let cp_off: usize = {
         let mut cp_off: usize = 0;
         for i in 0..4 {
