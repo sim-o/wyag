@@ -1,3 +1,4 @@
+use crate::gitobject::GitObject;
 use anyhow::Context;
 use clap::Parser;
 use cli::{Cli, CommandObjectType, Commands};
@@ -66,8 +67,8 @@ fn ls_pack(path: &Path, packfile: String) -> anyhow::Result<()> {
     let objects = repository
         .read_packfile(&packfile)
         .with_context(|| format!("reading packfile {}", packfile))?;
-    for o in objects.iter() {
-        println!("object: {}", o);
+    for (object_type, data) in objects.iter() {
+        println!("object: {}", GitObject::new(*object_type, data)?);
     }
     Ok(())
 }
@@ -97,11 +98,11 @@ fn read_object(
     let sha1 = repo
         .find_object(&name)
         .with_context(|| format!("finding object {}", name))?;
-    let obj = repo
-        .read_object(sha1)
+    let (_, data) = repo
+        .read_object_data(sha1)
         .with_context(|| format!("reading object {}", sha1.encode_hex::<String>()))?;
     std::io::stdout()
-        .write_all(&obj.serialize())
+        .write_all(&data)
         .context("writing serialized object to stdout")?;
     Ok(())
 }

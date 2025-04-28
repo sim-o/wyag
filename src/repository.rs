@@ -1,12 +1,12 @@
 extern crate sha1;
 
 use crate::cli::CommandObjectType;
-use crate::gitobject::DeltaObject;
 use crate::gitobject::{BlobObject, GitObject};
+use crate::gitobject::{DeltaObject, TreeObject};
 use crate::hashingreader::HashingReader;
 use crate::logiterator::LogIterator;
 use crate::pack::BinaryObject::{Blob, Commit, Tag, Tree};
-use crate::pack::{BinaryObject, Pack, parse_object_data};
+use crate::pack::{BinaryObject, Pack};
 use crate::packindex::PackIndex;
 use crate::repository::ObjectLocation::{ObjectFile, PackFile};
 use crate::util::validate_sha1;
@@ -263,11 +263,6 @@ impl Repository {
         self.repo_file(&path, false)
     }
 
-    pub fn read_object(&self, sha1: [u8; 20]) -> Result<GitObject> {
-        let (object_type, data) = self.read_object_data(sha1).context("reading object")?;
-        parse_object_data(object_type, data).context("reading object")
-    }
-
     fn find_object_location(&self, sha1: [u8; 20]) -> Option<ObjectLocation> {
         if let Some(path) = self.object_file_path(sha1) {
             if path.is_file() {
@@ -327,7 +322,7 @@ impl Repository {
         Ok(index)
     }
 
-    fn read_object_data(&self, sha1: [u8; 20]) -> Result<(BinaryObject, Vec<u8>)> {
+    pub fn read_object_data(&self, sha1: [u8; 20]) -> Result<(BinaryObject, Vec<u8>)> {
         let location = self
             .find_object_location(sha1)
             .context("Failed to find object")?;
@@ -560,14 +555,14 @@ impl Repository {
         };
 
         let obj = match object_type {
-            CommandObjectType::Blob => GitObject::Blob(BlobObject::from(data)),
+            CommandObjectType::Blob => GitObject::Blob(BlobObject::from(&data)),
             _ => todo!(),
         };
 
         self.write_object(&obj, write)
     }
 
-    pub fn read_packfile(&self, packfile_sha: &str) -> Result<Vec<GitObject>> {
+    pub fn read_packfile(&self, packfile_sha: &str) -> Result<Vec<(BinaryObject, Vec<u8>)>> {
         let path = self
             .repo_file(
                 &Path::new("objects")
@@ -585,8 +580,8 @@ impl Repository {
         trace!("finding object {}", reference);
         let sha1 = self.find_object(reference)?;
         trace!("reading object {}", sha1.encode_hex::<String>());
-        let object = match self.read_object(sha1)? {
-            GitObject::Tree(tree) => tree,
+        let object = match self.read_object_data(sha1)? {
+            (Tree, data) => TreeObject::new(&data)?,
             _ => bail!("object not a tree"),
         };
 

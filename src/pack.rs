@@ -1,15 +1,11 @@
 extern crate sha1;
 
-use GitObject::{Tag, Tree};
 use anyhow::{Context, Result};
 use flate2::bufread::ZlibDecoder;
-use log::{debug, warn};
+use log::debug;
 use std::io::{BufReader, Read};
 use std::io::{Seek, SeekFrom};
 
-use crate::gitobject::GitObject::{Blob, Commit, OffsetDelta, RefDelta};
-use crate::gitobject::{BlobObject, CommitObject, GitObject, TagObject, TreeObject};
-use crate::gitobject::{OffsetDeltaObject, RefDeltaObject};
 use crate::util::parse_offset_delta;
 
 pub struct Pack<T: Read + Seek> {
@@ -23,14 +19,7 @@ impl<T: Read + Seek> Pack<T> {
         Ok(pack)
     }
 
-    pub fn read_object_at(&mut self, offset: u64) -> Result<GitObject> {
-        self.reader
-            .seek(SeekFrom::Start(offset))
-            .context("seek offset in packfile")?;
-        self.read_object().context("reading object")
-    }
-
-    pub fn read(&mut self) -> Result<Vec<GitObject>> {
+    pub fn read(&mut self) -> Result<Vec<(BinaryObject, Vec<u8>)>> {
         self.reader
             .seek(SeekFrom::Start(0))
             .context("read from start of pack")?;
@@ -41,11 +30,7 @@ impl<T: Read + Seek> Pack<T> {
 
         for n in 0..entries {
             debug!("reading entry {}", n);
-            if let Ok(data) = self.read_object() {
-                result.push(data);
-            } else {
-                warn!("failed to read entry");
-            }
+            result.push(read_data(&mut self.reader)?);
         }
 
         Ok(result)
@@ -56,10 +41,6 @@ impl<T: Read + Seek> Pack<T> {
             .seek(SeekFrom::Start(offset))
             .with_context(|| format!("reading object at offset {}", offset))?;
         read_data(&mut self.reader)
-    }
-
-    fn read_object(&mut self) -> Result<GitObject> {
-        read_object(&mut self.reader).context("reading object")
     }
 
     fn check_header(&mut self) -> Result<usize> {
@@ -174,28 +155,6 @@ pub fn read_data<T: Read>(reader: &mut BufReader<T>) -> Result<(BinaryObject, Ve
             )
         })?,
     ))
-}
-
-pub fn read_object<T: Read>(reader: &mut BufReader<T>) -> Result<GitObject> {
-    let (object_type, data) = read_data(reader).context("reading object")?;
-    parse_object_data(object_type, data).context("reading object")
-}
-
-pub fn parse_object_data(object_type: BinaryObject, data: Vec<u8>) -> Result<GitObject> {
-    let object = match object_type {
-        BinaryObject::Commit => Commit(CommitObject::from(&data).context("parsing commit")?),
-        BinaryObject::Tree => Tree(TreeObject::new(&data).context("parsing tree")?),
-        BinaryObject::Blob => Blob(BlobObject::from(data)),
-        BinaryObject::Tag => Tag(TagObject::from(&data).context("parsing tag")?),
-        BinaryObject::OffsetDelta(offset) => {
-            OffsetDelta(OffsetDeltaObject::new(offset, &data).context("parsing offset delta")?)
-        }
-        BinaryObject::RefDelta(sha1) => {
-            RefDelta(RefDeltaObject::new(sha1, &data).context("parsing ref delta")?)
-        }
-    };
-
-    Ok(object)
 }
 
 fn read_sha1<T: Read>(reader: &mut BufReader<T>) -> Result<[u8; 20]> {

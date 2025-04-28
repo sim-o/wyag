@@ -1,7 +1,7 @@
 use crate::kvlm::{kvlm_parse, kvlm_serialize};
 use crate::pack::BinaryObject;
 use crate::util::{parse_variable_length, read_byte};
-use anyhow::Context;
+use anyhow::{Context, Result};
 use bytes::Buf;
 use hex::{ToHex, decode};
 use log::debug;
@@ -16,16 +16,16 @@ use std::{
 };
 
 #[derive(Debug)]
-pub enum GitObject {
-    Blob(BlobObject),
-    Commit(CommitObject),
+pub enum GitObject<'a> {
+    Blob(BlobObject<'a>),
+    Commit(CommitObject<'a>),
     Tree(TreeObject),
-    Tag(TagObject),
+    Tag(TagObject<'a>),
     OffsetDelta(OffsetDeltaObject),
     RefDelta(RefDeltaObject),
 }
 
-impl Display for GitObject {
+impl<'a> Display for GitObject<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
             GitObject::Blob(blob) => f.write_fmt(format_args!(
@@ -42,7 +42,26 @@ impl Display for GitObject {
     }
 }
 
-impl GitObject {
+impl<'a> GitObject<'a> {
+    pub fn new(object_type: BinaryObject, data: &'a [u8]) -> Result<Self> {
+        let object = match object_type {
+            BinaryObject::Commit => {
+                GitObject::Commit(CommitObject::from(data).context("parsing commit")?)
+            }
+            BinaryObject::Tree => GitObject::Tree(TreeObject::new(data).context("parsing tree")?),
+            BinaryObject::Blob => GitObject::Blob(BlobObject::from(data)),
+            BinaryObject::Tag => GitObject::Tag(TagObject::from(&data).context("parsing tag")?),
+            BinaryObject::OffsetDelta(offset) => GitObject::OffsetDelta(
+                OffsetDeltaObject::new(offset, data).context("parsing offset delta")?,
+            ),
+            BinaryObject::RefDelta(sha1) => {
+                GitObject::RefDelta(RefDeltaObject::new(sha1, data).context("parsing ref delta")?)
+            }
+        };
+
+        Ok(object)
+    }
+
     pub fn name(&self) -> &'static [u8] {
         match &self {
             GitObject::Blob(_) => b"blob",
@@ -53,25 +72,9 @@ impl GitObject {
         }
     }
 
-    pub fn to_binary_object(&self) -> BinaryObject {
-        match self {
-            GitObject::Blob(_) => BinaryObject::Blob,
-            GitObject::Commit(_) => BinaryObject::Commit,
-            GitObject::Tree(_) => BinaryObject::Tree,
-            GitObject::Tag(_) => BinaryObject::Tag,
-            GitObject::OffsetDelta(OffsetDeltaObject { offset, delta: _ }) => {
-                BinaryObject::OffsetDelta(*offset)
-            }
-            GitObject::RefDelta(RefDeltaObject {
-                reference,
-                delta: _,
-            }) => BinaryObject::RefDelta(*reference),
-        }
-    }
-
     pub fn serialize(&self) -> Vec<u8> {
         match &self {
-            GitObject::Blob(blob) => blob.serialize(),
+            GitObject::Blob(blob) => blob.serialize().to_vec(),
             GitObject::Commit(commit) => commit.serialize(),
             GitObject::Tag(tag) => tag.serialize(),
             GitObject::Tree(tree) => tree.serialize(),
@@ -82,33 +85,33 @@ impl GitObject {
 }
 
 #[derive(Debug)]
-pub struct BlobObject {
-    data: Vec<u8>,
+pub struct BlobObject<'a> {
+    data: &'a [u8],
 }
 
-impl BlobObject {
-    pub fn from(data: Vec<u8>) -> Self {
+impl<'a> BlobObject<'a> {
+    pub fn from(data: &'a [u8]) -> Self {
         Self { data }
     }
 
-    fn serialize(&self) -> Vec<u8> {
-        self.data.clone()
+    fn serialize(&self) -> &'a [u8] {
+        self.data
     }
 }
 
-impl Display for BlobObject {
+impl<'a> Display for BlobObject<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(from_utf8(&self.data).unwrap_or("<<BINARY>>"))
     }
 }
 
 #[derive(Debug)]
-pub struct CommitObject {
-    kvlm: OrderedHashMap<String, Vec<Vec<u8>>>,
+pub struct CommitObject<'a> {
+    kvlm: OrderedHashMap<&'a [u8], Vec<&'a [u8]>>,
 }
 
-impl CommitObject {
-    fn get(&self, name: &str) -> impl Iterator<Item = String> {
+impl<'a> CommitObject<'a> {
+    fn get(&self, name: &[u8]) -> impl Iterator<Item = String> {
         self.kvlm.get(name).into_iter().flat_map(|a| {
             a.first()
                 .into_iter()
@@ -117,21 +120,21 @@ impl CommitObject {
     }
 
     pub fn author(&self) -> Vec<String> {
-        self.get("author").collect()
+        self.get(b"author").collect()
     }
 
     pub fn message(&self) -> Option<String> {
-        self.get("").next()
+        self.get(b"").next()
     }
 
     pub fn parents(&self) -> Vec<[u8; 20]> {
-        self.get("parent")
+        self.get(b"parent")
             .flat_map(|s| decode(s).ok())
             .flat_map(|v| v.deref().try_into().ok())
             .collect()
     }
 
-    pub fn from(data: &[u8]) -> anyhow::Result<Self> {
+    pub fn from(data: &'a [u8]) -> Result<Self> {
         Ok(Self {
             kvlm: kvlm_parse(data).context("Failed to parse commit kvlm")?,
         })
@@ -143,13 +146,15 @@ impl CommitObject {
 }
 
 #[derive(Debug)]
-pub struct TagObject {
-    kvlm: OrderedHashMap<String, Vec<Vec<u8>>>,
+pub struct TagObject<'a> {
+    data: &'a [u8],
+    kvlm: OrderedHashMap<&'a [u8], Vec<&'a [u8]>>,
 }
 
-impl TagObject {
-    pub fn from(data: &[u8]) -> anyhow::Result<Self> {
+impl<'a> TagObject<'a> {
+    pub fn from(data: &'a [u8]) -> Result<Self> {
         Ok(Self {
+            data,
             kvlm: kvlm_parse(data).context("parsing tag object")?,
         })
     }
@@ -164,7 +169,7 @@ pub struct TreeObject {
 }
 
 impl TreeObject {
-    pub fn new(data: &[u8]) -> anyhow::Result<TreeObject> {
+    pub fn new(data: &[u8]) -> Result<TreeObject> {
         debug!("reading tree len: {}", data.len());
         let mut leaves = Vec::new();
 
@@ -221,7 +226,7 @@ impl Debug for TreeLeaf {
 }
 
 impl TreeLeaf {
-    fn parse_one(data: &[u8]) -> anyhow::Result<(Self, usize)> {
+    fn parse_one(data: &[u8]) -> Result<(Self, usize)> {
         let x = data
             .iter()
             .position(|&b| b == b' ')
@@ -284,8 +289,8 @@ pub struct RefDeltaObject {
 }
 
 impl DeltaObject {
-    pub fn from(data: &[u8]) -> anyhow::Result<Self> {
-        parse_delta_data(data)
+    pub fn from(data: &[u8]) -> Result<Self> {
+        parse_delta_data(data).context("new delta")
     }
 
     pub fn rebuild(&self, data: Vec<u8>) -> Vec<u8> {
@@ -305,7 +310,7 @@ impl DeltaObject {
 }
 
 impl OffsetDeltaObject {
-    pub fn new(offset: u64, data: &Vec<u8>) -> anyhow::Result<Self> {
+    pub fn new(offset: u64, data: &[u8]) -> Result<Self> {
         Ok(Self {
             offset,
             delta: DeltaObject::from(data).context("parsing offset delta object")?,
@@ -314,7 +319,7 @@ impl OffsetDeltaObject {
 }
 
 impl RefDeltaObject {
-    pub fn new(reference: [u8; 20], data: &[u8]) -> anyhow::Result<Self> {
+    pub fn new(reference: [u8; 20], data: &[u8]) -> Result<Self> {
         Ok(Self {
             reference,
             delta: parse_delta_data(data).context("parsing ref delta object")?,
@@ -382,7 +387,7 @@ impl Display for DeltaInstruction {
     }
 }
 
-fn parse_delta_data(reader: &[u8]) -> anyhow::Result<DeltaObject> {
+fn parse_delta_data(reader: &[u8]) -> Result<DeltaObject> {
     let mut reader = BufReader::new(reader.reader());
     let base_size = parse_variable_length(&mut reader).context("reading base size")?;
     let expanded_size = parse_variable_length(&mut reader).context("reading expanded size")?;
