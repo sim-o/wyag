@@ -215,9 +215,9 @@ Q52UWybBzpaP9HEd4XnR+HuQ4k2K0ns2KgNImsNvIyFwbpMUyUWLMPimaV1DWUXo
             .for_each(|(actual, expected)| {
                 assert_eq!(
                     from_utf8(actual.deref())
-                        .expect(&format!("{}: {}", msg, "could not parse actual")),
+                        .unwrap_or_else(|_| panic!("{}: {}", msg, "could not parse actual")),
                     from_utf8(&expected)
-                        .expect(&format!("{}: {}", msg, "failed to parse expected"))
+                        .unwrap_or_else(|_| panic!("{}: {}", msg, "failed to parse expected"))
                 );
             });
     }

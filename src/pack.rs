@@ -1,11 +1,11 @@
 extern crate sha1;
 
+use GitObject::{Tag, Tree};
 use anyhow::{Context, Result};
 use flate2::bufread::ZlibDecoder;
 use log::{debug, warn};
 use std::io::{BufReader, Read};
 use std::io::{Seek, SeekFrom};
-use GitObject::{Tag, Tree};
 
 use crate::gitobject::GitObject::{Blob, Commit, OffsetDelta, RefDelta};
 use crate::gitobject::{BlobObject, CommitObject, GitObject, TagObject, TreeObject};
@@ -124,7 +124,7 @@ impl BinaryObject {
             BinaryObject::OffsetDelta(_) => "offsetdelta",
             BinaryObject::RefDelta(_) => "refdelta",
         }
-            .to_string()
+        .to_string()
     }
 }
 

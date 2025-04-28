@@ -1,5 +1,5 @@
 use crate::hashingreader::HashingReader;
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use hex::ToHex;
 use log::{debug, info, trace};
 use std::cmp::Ordering;
@@ -21,14 +21,20 @@ impl PackIndex {
         let mut reader = HashingReader::new(reader);
 
         check_header(&mut reader).context("check header")?;
-        let fanout: [u32; 256] = read_n_u32be(&mut reader, 256).context("reading fanout table")?.try_into().unwrap();
+        let fanout: [u32; 256] = read_n_u32be(&mut reader, 256)
+            .context("reading fanout table")?
+            .try_into()
+            .unwrap();
         let hashes = read_hashes(&mut reader, fanout[255] as usize).context("reading hashes")?;
-        let crc32 = read_n_u32be(&mut reader, fanout[255] as usize).context("reading crc32 table")?;
-        let offsets = read_n_u32be(&mut reader, fanout[255] as usize).context("reading offsets table")?;
+        let crc32 =
+            read_n_u32be(&mut reader, fanout[255] as usize).context("reading crc32 table")?;
+        let offsets =
+            read_n_u32be(&mut reader, fanout[255] as usize).context("reading offsets table")?;
         let offsets64 = read_n_u64be(
             &mut reader,
             offsets.iter().filter(|&n| n & 0x8000_0000 != 0).count(),
-        ).context("reading 64 bit offsets table")?;
+        )
+        .context("reading 64 bit offsets table")?;
         let pack_sha1 = read_hash(&mut reader).context("reading pack sha1")?;
         let actual_index_sha1 = reader.finalize();
         let index_sha1 = read_hash(&mut reader).context("reading index sha1")?;
@@ -97,9 +103,14 @@ fn check_header<T: Read>(reader: &mut HashingReader<T>) -> anyhow::Result<()> {
             bail!("invalid header");
         }
 
-        reader.read_exact(&mut header).context("reading header version")?;
+        reader
+            .read_exact(&mut header)
+            .context("reading header version")?;
         let version = u32::from_be_bytes(header);
-        ensure!(version == 2, "only version 2 supported, pack index is {version}");
+        ensure!(
+            version == 2,
+            "only version 2 supported, pack index is {version}"
+        );
     }
     trace!("read header");
     Ok(())
@@ -111,10 +122,7 @@ fn read_hash<T: Read>(reader: &mut HashingReader<T>) -> io::Result<[u8; 20]> {
     Ok(hash.try_into().unwrap())
 }
 
-fn read_hashes<T: Read>(
-    reader: &mut HashingReader<T>,
-    items: usize,
-) -> io::Result<Vec<[u8; 20]>> {
+fn read_hashes<T: Read>(reader: &mut HashingReader<T>, items: usize) -> io::Result<Vec<[u8; 20]>> {
     let hashes = {
         let mut hashes = vec![0; 20 * items];
         reader.read_exact(&mut hashes)?;

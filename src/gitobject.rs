@@ -3,12 +3,17 @@ use crate::pack::BinaryObject;
 use crate::util::{parse_variable_length, read_byte};
 use anyhow::Context;
 use bytes::Buf;
-use hex::{decode, ToHex};
+use hex::{ToHex, decode};
 use log::debug;
 use ordered_hash_map::OrderedHashMap;
 use std::io::{BufReader, ErrorKind, Read};
 use std::ops::Deref;
-use std::{fmt::{Debug, Display}, io, path::PathBuf, str::from_utf8};
+use std::{
+    fmt::{Debug, Display},
+    io,
+    path::PathBuf,
+    str::from_utf8,
+};
 
 #[derive(Debug)]
 pub enum GitObject {
@@ -58,9 +63,9 @@ impl GitObject {
                 BinaryObject::OffsetDelta(*offset)
             }
             GitObject::RefDelta(RefDeltaObject {
-                                    reference,
-                                    delta: _,
-                                }) => BinaryObject::RefDelta(*reference),
+                reference,
+                delta: _,
+            }) => BinaryObject::RefDelta(*reference),
         }
     }
 
@@ -103,7 +108,7 @@ pub struct CommitObject {
 }
 
 impl CommitObject {
-    fn get(&self, name: &str) -> impl Iterator<Item=String> {
+    fn get(&self, name: &str) -> impl Iterator<Item = String> {
         self.kvlm.get(name).into_iter().flat_map(|a| {
             a.first()
                 .into_iter()
@@ -170,12 +175,10 @@ impl TreeObject {
             leaves.push(leaf);
             rem = &rem[len..];
         }
-        Ok(Self {
-            leaves,
-        })
+        Ok(Self { leaves })
     }
 
-    pub fn leaf_iter(&self) -> impl Iterator<Item=&TreeLeaf> {
+    pub fn leaf_iter(&self) -> impl Iterator<Item = &TreeLeaf> {
         self.leaves.iter()
     }
 
@@ -281,7 +284,7 @@ pub struct RefDeltaObject {
 }
 
 impl DeltaObject {
-    pub fn from(data: &Vec<u8>) -> anyhow::Result<Self> {
+    pub fn from(data: &[u8]) -> anyhow::Result<Self> {
         parse_delta_data(data)
     }
 
@@ -293,7 +296,7 @@ impl DeltaObject {
                     result.extend_from_slice(&data[*offset..offset + size]);
                 }
                 DeltaInstruction::Insert(insert) => {
-                    result.extend_from_slice(&insert);
+                    result.extend_from_slice(insert);
                 }
             };
         }
@@ -311,7 +314,7 @@ impl OffsetDeltaObject {
 }
 
 impl RefDeltaObject {
-    pub fn new(reference: [u8; 20], data: &Vec<u8>) -> anyhow::Result<Self> {
+    pub fn new(reference: [u8; 20], data: &[u8]) -> anyhow::Result<Self> {
         Ok(Self {
             reference,
             delta: parse_delta_data(data).context("parsing ref delta object")?,

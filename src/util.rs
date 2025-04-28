@@ -47,7 +47,7 @@ pub fn get_sha1(object_type: &BinaryObject, data: &[u8]) -> String {
     Update::update(&mut hasher, b" ");
     Update::update(&mut hasher, data.len().to_string().as_bytes());
     Update::update(&mut hasher, b"\0");
-    Update::update(&mut hasher, &data);
+    Update::update(&mut hasher, data);
     hasher.finalize().encode_hex()
 }
 

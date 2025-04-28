@@ -21,7 +21,7 @@ impl<'a> LogIterator<'a> {
     }
 }
 
-impl<'a> Iterator for LogIterator<'a> {
+impl Iterator for LogIterator<'_> {
     type Item = anyhow::Result<String>;
 
     fn next(&mut self) -> Option<Self::Item> {
