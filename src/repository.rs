@@ -1,8 +1,10 @@
 extern crate sha1;
 
 use crate::cli::CommandObjectType;
-use crate::gitobject::{BlobObject, GitObject};
-use crate::gitobject::{DeltaObject, TreeObject};
+use crate::gitobject::blob::BlobObject;
+use crate::gitobject::delta::DeltaObject;
+use crate::gitobject::tree::TreeObject;
+use crate::gitobject::GitObject;
 use crate::hashingreader::HashingReader;
 use crate::logiterator::LogIterator;
 use crate::pack::BinaryObject::{Blob, Commit, Tag, Tree};
@@ -10,26 +12,26 @@ use crate::pack::{BinaryObject, Pack};
 use crate::packindex::PackIndex;
 use crate::repository::ObjectLocation::{ObjectFile, PackFile};
 use crate::util::validate_sha1;
-use BinaryObject::{OffsetDelta, RefDelta};
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{bail, ensure, Context, Result};
 use bytes::{Buf, Bytes};
 use configparser::ini::Ini;
-use flate2::Compression;
 use flate2::bufread::{ZlibDecoder, ZlibEncoder};
-use hex::{ToHex, decode};
+use flate2::Compression;
+use hex::{decode, ToHex};
 use log::{debug, trace};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::io::{Seek, sink};
+use std::io::{sink, Seek};
 use std::rc::Rc;
 use std::{
-    fs::{File, create_dir_all},
+    fs::{create_dir_all, File},
     io,
     io::{BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     str::from_utf8,
 };
 use tempfile::NamedTempFile;
+use BinaryObject::{OffsetDelta, RefDelta};
 
 type PackRef = Rc<RefCell<Pack<File>>>;
 
@@ -215,10 +217,10 @@ impl Repository {
 
         let size_idx = type_idx
             + raw
-                .iter()
-                .skip(type_idx)
-                .position(|&b| b == b'\x00')
-                .context("object corrupt: missing size")?;
+            .iter()
+            .skip(type_idx)
+            .position(|&b| b == b'\x00')
+            .context("object corrupt: missing size")?;
 
         trace!("reading size...");
         let size = from_utf8(&raw[type_idx + 1..size_idx])
@@ -507,7 +509,7 @@ impl Repository {
                     .chain(&serialized)
                     .copied(),
             )
-            .reader();
+                .reader();
             HashingReader::new(bytes)
         };
 
@@ -605,9 +607,9 @@ impl Repository {
                     recurse,
                     &path.join(&item.path),
                 )
-                .with_context(|| {
-                    format!("Failed to descend tree in {}", item.path.to_string_lossy())
-                })?;
+                    .with_context(|| {
+                        format!("Failed to descend tree in {}", item.path.to_string_lossy())
+                    })?;
             } else {
                 trace!(
                     "{} {} {} {}",

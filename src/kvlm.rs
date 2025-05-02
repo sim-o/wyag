@@ -1,14 +1,14 @@
 use anyhow::Context;
 use ordered_hash_map::OrderedHashMap;
 
-pub fn kvlm_parse<'a>(raw: &'a [u8]) -> anyhow::Result<OrderedHashMap<&'a [u8], Vec<&'a [u8]>>> {
+pub fn kvlm_parse<'a>(raw: &'a mut [u8]) -> anyhow::Result<OrderedHashMap<&'a [u8], Vec<&'a [u8]>>> {
     let map: OrderedHashMap<&'a _, Vec<&'a _>> = OrderedHashMap::new();
     let map = kvlm_parse_rec(raw, map).context("parsing kvlm")?;
     Ok(map)
 }
 
 fn kvlm_parse_rec<'a>(
-    raw: &'a [u8],
+    raw: &'a mut [u8],
     mut map: OrderedHashMap<&'a [u8], Vec<&'a [u8]>>,
 ) -> anyhow::Result<OrderedHashMap<&'a [u8], Vec<&'a [u8]>>> {
     if raw.is_empty() {
@@ -25,9 +25,9 @@ fn kvlm_parse_rec<'a>(
         .ok_or("kvlm missing space");
 
     let spc = spc.unwrap();
-    let key: &'a [u8] = &raw[..spc];
+    let (key, raw) = raw.split_at_mut(spc);
 
-    let mut end: usize = spc;
+    let mut end: usize = 0;
     loop {
         end += 1 + raw[end + 1..]
             .iter()
@@ -39,16 +39,25 @@ fn kvlm_parse_rec<'a>(
         }
     }
 
+    let raw = &mut raw[1..];
+    end -= 1;
+
+    let (value, rest) = raw.split_at_mut(end);
+    let value = kvlm_clean_value(value);
     if let Some(v) = map.get_mut(key) {
-        v.push(&raw[spc + 1..end]);
+        v.push(value);
     } else {
-        map.insert(key, vec![&raw[spc + 1..end]]);
+        map.insert(key, vec![value]);
     }
 
-    kvlm_parse_rec(&raw[end + 1..], map)
+    kvlm_parse_rec(&mut rest[1..], map)
 }
 
-fn kvlm_clean_value(mut vec: Vec<u8>) -> Vec<u8> {
+fn kvlm_clean_value(vec: &mut [u8]) -> &[u8] {
+    if vec.is_empty() {
+        return vec;
+    }
+
     let mut skip = 0;
     let mut i = 1;
     loop {
@@ -64,8 +73,8 @@ fn kvlm_clean_value(mut vec: Vec<u8>) -> Vec<u8> {
         vec[i] = vec[i + skip];
         i += 1;
     }
-    vec.truncate(i);
-    vec
+
+    &vec[..i]
 }
 
 pub fn kvlm_serialize(map: &OrderedHashMap<&[u8], Vec<&[u8]>>) -> Vec<u8> {
@@ -133,7 +142,8 @@ gpgsig -----BEGIN PGP SIGNATURE-----
 Create first draft"#;
     #[test]
     fn test_kvlm_parse() {
-        let map = kvlm_parse(KVLM).unwrap();
+        let mut kvlm = KVLM.to_vec();
+        let map = kvlm_parse(&mut kvlm).unwrap();
         assert_bytes_eq(
             map.get(&b"tree"[..]),
             vec![&b"29ff16c9c14e2652b22f8b78bb08a5a07930c147"[..]],
@@ -176,15 +186,16 @@ Q52UWybBzpaP9HEd4XnR+HuQ4k2K0ns2KgNImsNvIyFwbpMUyUWLMPimaV1DWUXo
 
     #[test]
     fn test_serialize() {
-        let map = kvlm_parse(KVLM).unwrap();
-        let ser = kvlm_serialize(&map);
+        let mut kvlm = KVLM.to_vec();
+        let map = kvlm_parse(&mut kvlm).unwrap();
+        let mut ser = kvlm_serialize(&map);
         assert_bytes_eq(
             map.get(b"".as_slice()),
             vec![b"Create first draft".as_slice()],
             "comment",
         );
         debug!("{}", from_utf8(&ser).unwrap());
-        assert_eq!(readable_map(&map), readable_map(&kvlm_parse(&ser).unwrap()));
+        assert_eq!(readable_map(&map), readable_map(&kvlm_parse(&mut ser).unwrap()));
     }
 
     fn readable_map(map: &OrderedHashMap<&[u8], Vec<&[u8]>>) -> HashMap<String, Vec<String>> {

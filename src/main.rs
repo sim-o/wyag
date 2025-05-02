@@ -67,8 +67,8 @@ fn ls_pack(path: &Path, packfile: String) -> anyhow::Result<()> {
     let objects = repository
         .read_packfile(&packfile)
         .with_context(|| format!("reading packfile {}", packfile))?;
-    for (object_type, data) in objects.iter() {
-        println!("object: {}", GitObject::new(*object_type, data)?);
+    for (object_type, mut data) in objects.into_iter() {
+        println!("object: {}", GitObject::new(object_type, &mut data)?);
     }
     Ok(())
 }
