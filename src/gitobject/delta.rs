@@ -1,9 +1,10 @@
-use crate::util::{parse_variable_length, read_byte};
-use anyhow::Context;
+use crate::util::{get_delta_hdr_size, read_byte};
+use anyhow::{ensure, Context};
 use bytes::Buf;
+use log::trace;
 use std::fmt::Display;
 use std::io;
-use std::io::{BufReader, ErrorKind, Read};
+use std::io::{ErrorKind, Read};
 use std::str::from_utf8;
 
 #[derive(Debug)]
@@ -26,23 +27,42 @@ pub struct RefDeltaObject {
 }
 
 impl DeltaObject {
-    pub fn from(data: &[u8]) -> anyhow::Result<Self> {
-        parse_delta_data(data).context("new delta")
+    pub fn from(delta_data: &[u8]) -> anyhow::Result<Self> {
+        parse_delta_data(delta_data).context("new delta")
     }
 
-    pub fn rebuild(&self, data: Vec<u8>) -> Vec<u8> {
+    pub fn rebuild(&self, reference_data: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+        trace!(
+            "rebuilding from {} [[{}]]",
+            reference_data.len(),
+            from_utf8(&reference_data)
+                .map(String::from)
+                .unwrap_or_else(|e| from_utf8(&reference_data[..e.valid_up_to()])
+                    .unwrap()
+                    .to_string()
+                    + "...<<bad-utf8>>")
+        );
         let mut result = Vec::new();
         for instr in self.instructions.iter() {
             match instr {
                 DeltaInstruction::Copy(offset, size) => {
-                    result.extend_from_slice(&data[*offset..offset + size]);
+                    trace!("copy @{} +{}", offset, size);
+                    result.extend_from_slice(&reference_data[*offset..offset + size]);
                 }
                 DeltaInstruction::Insert(insert) => {
+                    trace!("insert +{}", insert.len());
                     result.extend_from_slice(insert);
                 }
             };
         }
-        result
+        ensure!(
+            result.len() == self.expanded_size,
+            "unpacked file size incorrect {} expected to be {}, base size {}",
+            reference_data.len(),
+            self.expanded_size,
+            self.base_size,
+        );
+        Ok(result)
     }
 }
 
@@ -64,10 +84,7 @@ impl RefDeltaObject {
     }
 }
 
-fn parse_copy_instruction<T: Read>(
-    opcode: u8,
-    reader: &mut BufReader<T>,
-) -> io::Result<DeltaInstruction> {
+fn parse_copy_instruction<T: Read>(opcode: u8, reader: &mut T) -> io::Result<DeltaInstruction> {
     let cp_off: usize = {
         let mut cp_off: usize = 0;
         for i in 0..4 {
@@ -124,10 +141,10 @@ impl Display for DeltaInstruction {
     }
 }
 
-fn parse_delta_data(reader: &[u8]) -> anyhow::Result<DeltaObject> {
-    let mut reader = BufReader::new(reader.reader());
-    let base_size = parse_variable_length(&mut reader).context("reading base size")?;
-    let expanded_size = parse_variable_length(&mut reader).context("reading expanded size")?;
+fn parse_delta_data(bytes: &[u8]) -> anyhow::Result<DeltaObject> {
+    let mut reader = bytes.reader();
+    let base_size = get_delta_hdr_size(&mut reader).context("reading base size")?;
+    let expanded_size = get_delta_hdr_size(&mut reader).context("reading expanded size")?;
 
     let mut instructions = Vec::new();
     loop {

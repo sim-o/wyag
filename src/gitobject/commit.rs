@@ -11,7 +11,7 @@ pub struct CommitObject<'a> {
 }
 
 impl<'a> CommitObject<'a> {
-    fn get(&self, name: &[u8]) -> impl Iterator<Item=String> {
+    fn get(&self, name: &[u8]) -> impl Iterator<Item = String> {
         self.kvlm.get(name).into_iter().flat_map(|a| {
             a.first()
                 .into_iter()

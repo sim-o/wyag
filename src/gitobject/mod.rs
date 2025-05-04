@@ -10,9 +10,9 @@ use std::str::from_utf8;
 
 pub mod blob;
 pub mod commit;
-pub mod tree;
-pub mod tag;
 pub mod delta;
+pub mod tag;
+pub mod tree;
 
 #[derive(Debug)]
 pub enum GitObject<'a> {

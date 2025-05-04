@@ -3,13 +3,11 @@ use anyhow::Context;
 use clap::Parser;
 use cli::{Cli, CommandObjectType, Commands};
 use hex::ToHex;
-use log::error;
 use logger::SimpleLogger;
 use repository::Repository;
 use std::{
     io::Write,
     path::{Path, PathBuf},
-    process::exit,
 };
 
 mod cli;
@@ -25,14 +23,14 @@ mod util;
 
 static LOGGER: SimpleLogger = SimpleLogger;
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     log::set_logger(&LOGGER)
         .map(|()| log::set_max_level(cli.log_level.filter()))
         .expect("failed to set logger");
 
-    let result: anyhow::Result<()> = match cli.command {
+    match cli.command {
         Commands::Init { path } => init(path),
         Commands::CatObject {
             object_type,
@@ -53,11 +51,6 @@ fn main() {
             repository,
             reference,
         } => log(repository.unwrap_or(PathBuf::new()), reference),
-    };
-
-    if let Err(error) = result {
-        error!("Error: {}", error);
-        exit(1);
     }
 }
 
@@ -98,8 +91,8 @@ fn read_object(
     let sha1 = repo
         .find_object(&name)
         .with_context(|| format!("finding object {}", name))?;
-    let (_, data) = repo
-        .read_object_data(sha1)
+    let mut data = Vec::new();
+    repo.read_object_data(sha1, &mut data)
         .with_context(|| format!("reading object {}", sha1.encode_hex::<String>()))?;
     std::io::stdout()
         .write_all(&data)

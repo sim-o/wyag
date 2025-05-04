@@ -21,7 +21,8 @@ use hex::{decode, ToHex};
 use log::{debug, trace};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::io::{sink, Seek};
+use std::io::sink;
+use std::io::Seek;
 use std::rc::Rc;
 use std::{
     fs::{create_dir_all, File},
@@ -193,7 +194,7 @@ impl Repository {
         Ok(())
     }
 
-    fn read_object_file_data(&self, sha1: [u8; 20]) -> Result<(BinaryObject, Vec<u8>)> {
+    fn read_object_file_data(&self, sha1: [u8; 20], data: &mut Vec<u8>) -> Result<BinaryObject> {
         let path = self
             .object_file_path(sha1)
             .with_context(|| format!("Could not load object {}", sha1.encode_hex::<String>()))?;
@@ -205,37 +206,47 @@ impl Repository {
 
         let mut file = File::open(path).context("opening object file")?;
         let mut decoder = ZlibDecoder::new(BufReader::new(&mut file));
-        let mut raw: Vec<u8> = Vec::new();
+        let mut raw = [0; 64];
         decoder
-            .read_to_end(&mut raw)
+            .read_exact(&mut raw)
             .context("reading object file")?;
-
-        let type_idx = raw
-            .iter()
-            .position(|&b| b == b' ')
-            .context("object corrupt: missing type")?;
-
-        let size_idx = type_idx
-            + raw
-            .iter()
-            .skip(type_idx)
-            .position(|&b| b == b'\x00')
-            .context("object corrupt: missing size")?;
-
-        trace!("reading size...");
-        let size = from_utf8(&raw[type_idx + 1..size_idx])
+        trace!(
+            "first part: {}",
+            from_utf8(&raw).unwrap_or_else(|e| from_utf8(&raw[..e.valid_up_to()]).unwrap())
+        );
+        let (object_type, raw) = raw.split_at(
+            raw.iter()
+                .position(|&b| b == b' ')
+                .context("expected space")?,
+        );
+        let (size, raw) =
+            raw[1..].split_at(raw.iter().position(|&b| b == 0).context("expected null")?);
+        trace!(
+            "reading size... [{}]",
+            from_utf8(&size[..size.len() - 1]).unwrap_or("<<bad-utf8>>")
+        );
+        let size = from_utf8(&size[..size.len() - 1])
             .context("parsing size as utf8")?
             .parse::<usize>()
             .context("parsing size as usize")?;
-        ensure!(
-            size == raw.len() - size_idx - 1,
-            "object corrupt: size {} does not match expected {}",
-            size,
-            raw.len() - size_idx - 1,
+
+        data.extend_from_slice(raw);
+        trace!(
+            "remaining [[{}]]",
+            from_utf8(data).unwrap_or_else(|e| from_utf8(&data[..e.valid_up_to()]).unwrap())
+        );
+        decoder.read_to_end(data).context("reading object")?;
+        trace!(
+            "fully read [[{}]]",
+            from_utf8(data).unwrap_or_else(|e| from_utf8(&data[..e.valid_up_to()]).unwrap())
         );
 
-        let object_type = &raw[..type_idx];
-        let data = raw[size_idx + 1..].to_vec();
+        ensure!(
+            size == data.len(),
+            "object corrupt: size {} does not match expected {}",
+            size,
+            raw.len(),
+        );
         debug!(
             "type = '{}' size = {}",
             from_utf8(object_type)
@@ -255,8 +266,8 @@ impl Repository {
             ),
         };
 
-        validate_sha1(sha1, &object_type, &data).context("validating object sha1")?;
-        Ok((object_type, data))
+        validate_sha1(sha1, object_type, data).context("validating object sha1")?;
+        Ok(object_type)
     }
 
     fn object_file_path(&self, sha1: [u8; 20]) -> Option<PathBuf> {
@@ -324,11 +335,11 @@ impl Repository {
         Ok(index)
     }
 
-    pub fn read_object_data(&self, sha1: [u8; 20]) -> Result<(BinaryObject, Vec<u8>)> {
+    pub fn read_object_data(&self, sha1: [u8; 20], data: &mut Vec<u8>) -> Result<BinaryObject> {
         let location = self
             .find_object_location(sha1)
             .context("Failed to find object")?;
-        self.read_object_from_location(sha1, &location)
+        self.read_object_from_location(sha1, location, data)
             .context("reading object from location")
     }
 
@@ -360,26 +371,53 @@ impl Repository {
     fn read_object_from_location(
         &self,
         sha1: [u8; 20],
-        location: &ObjectLocation,
-    ) -> Result<(BinaryObject, Vec<u8>)> {
+        location: ObjectLocation,
+        data: &mut Vec<u8>,
+    ) -> Result<BinaryObject> {
+        ensure!(
+            data.is_empty(),
+            "data must be empty before reading {}",
+            sha1.encode_hex::<String>()
+        );
         match location {
-            ObjectFile => self.read_object_file_data(sha1),
+            ObjectFile => self.read_object_file_data(sha1, data),
             PackFile(pack, offset) => {
                 let rc = self
-                    .open_pack(*pack)
+                    .open_pack(pack)
                     .with_context(|| format!("opening pack {}", pack.encode_hex::<String>()))?;
                 let mut packfile = rc.borrow_mut();
-                let (object_type, data) =
-                    packfile.read_object_data_at(*offset).with_context(|| {
+                let object_type =
+                    packfile
+                        .read_object_data_at(offset, data)
+                        .with_context(|| {
+                            format!(
+                                "reading object {} from packfile {} at {}",
+                                sha1.encode_hex::<String>(),
+                                pack.encode_hex::<String>(),
+                                offset
+                            )
+                        })?;
+                if !object_type.is_delta() {
+                    debug!(
+                        "object is not a delta, not unpacking: {} {}, len = {}",
+                        object_type.name(),
+                        sha1.encode_hex::<String>(),
+                        data.len()
+                    );
+
+                    validate_sha1(sha1, object_type, data).with_context(|| {
                         format!(
-                            "reading object {} from packfile {} at {}",
+                            "reading {} from pack {} at {}",
                             sha1.encode_hex::<String>(),
                             pack.encode_hex::<String>(),
                             offset
                         )
                     })?;
-                let (object_type, data) = self
-                    .unpack_delta(&mut packfile, *offset, object_type, data)
+                    return Ok(object_type);
+                }
+
+                let (object_type, unpacked_data) = self
+                    .unpack_delta(&mut packfile, offset, object_type, data)
                     .with_context(|| {
                         format!(
                             "unpacking delta of object {} from packfile {} at {}",
@@ -388,76 +426,82 @@ impl Repository {
                             offset
                         )
                     })?;
-                validate_sha1(sha1, &object_type, &data).with_context(|| {
+                data.truncate(0);
+                data.extend_from_slice(&unpacked_data);
+                validate_sha1(sha1, object_type, data).with_context(|| {
                     format!(
-                        "reading {} from pack {} at {}",
+                        "reading {} from pack {} at {} - unpacked",
                         sha1.encode_hex::<String>(),
                         pack.encode_hex::<String>(),
-                        *offset
+                        offset
                     )
                 })?;
-                Ok((object_type, data))
+                Ok(object_type)
             }
         }
     }
 
-    fn unpack_delta<T: Read + Seek>(
+    fn unpack_delta(
         &self,
-        packfile: &mut Pack<T>,
+        packfile: &mut Pack<File>,
         offset: u64,
         object_type: BinaryObject,
-        data: Vec<u8>,
+        data: &[u8],
     ) -> Result<(BinaryObject, Vec<u8>)> {
-        trace!("unpacking delta");
-        let data = match object_type {
-            Blob | Commit | Tag | Tree => (object_type, data),
+        trace!("unpacking {}", object_type.name());
+        let (reference_type, reference_data) = match object_type {
             OffsetDelta(delta_offset) => {
-                let (next_object_type, next_data) = packfile
-                    .read_object_data_at(offset - delta_offset)
+                let mut reference_data = Vec::new();
+                let reference_offset = offset - delta_offset;
+                let reference_type = packfile
+                    .read_object_data_at(reference_offset, &mut reference_data)
                     .context("reading object in packfile")?;
-                let (next_object_type, next_data) = self
-                    .unpack_delta(packfile, offset - delta_offset, next_object_type, next_data)
-                    .context("unpacking delta")?;
-                (
-                    next_object_type,
-                    DeltaObject::from(&data)
-                        .context("reading delta data")?
-                        .rebuild(next_data),
-                )
+
+                if !reference_type.is_delta() {
+                    (reference_type, reference_data)
+                } else {
+                    self.unpack_delta(packfile, reference_offset, reference_type, &reference_data)?
+                }
             }
             RefDelta(reference) => {
                 let location = self
                     .find_object_location(reference)
                     .context("reference not found")?;
-                let (next_object_type, next_data) = self
-                    .read_object_from_location(reference, &location)
+                let mut reference_data = Vec::new();
+                let reference_type = self
+                    .read_object_from_location(reference, location, &mut reference_data)
                     .with_context(|| {
                         format!(
                             "unpacking ref delta reference {}",
                             reference.encode_hex::<String>()
                         )
                     })?;
-                let (next_object_type, next_data) = match location {
-                    ObjectFile => self
-                        .unpack_delta(packfile, 0, next_object_type, next_data)
-                        .context("unpacking delta from object file")?,
-                    PackFile(pack, offset) => {
-                        let rc = self.open_pack(pack).context("found ref delta ")?;
-                        let mut next_pack = rc.borrow_mut();
-                        self.unpack_delta(&mut next_pack, offset, next_object_type, next_data)
-                            .context("unpacking ref delta")?
+
+                if !reference_type.is_delta() {
+                    (reference_type, reference_data)
+                } else {
+                    match location {
+                        ObjectFile => self.unpack_delta(packfile, 0, reference_type, &reference_data)?,
+                        PackFile(packfile_id, offset) => {
+                            let reference_packfile = self.open_pack(packfile_id)?;
+                            let reference_packfile = &mut reference_packfile.borrow_mut();
+                            self.unpack_delta(reference_packfile, offset, reference_type, &reference_data)?
+                        }
                     }
-                };
-                (
-                    next_object_type,
-                    DeltaObject::from(&data)
-                        .context("unpacking delta data")?
-                        .rebuild(next_data),
-                )
+                }
             }
+            _ => bail!("expected delta type"),
         };
-        trace!("\tunpacked");
-        Ok(data)
+
+        trace!("reference data type: {}", reference_type.name());
+
+        Ok((
+            reference_type,
+            DeltaObject::from(data)
+                .context("reading delta data")?
+                .rebuild(reference_data)
+                .context("rebuilding delta")?,
+        ))
     }
 
     pub fn find_object(&self, name: &str) -> Result<[u8; 20]> {
@@ -575,15 +619,17 @@ impl Repository {
             .context("Packfile does not exist")?;
 
         let reader = BufReader::new(File::open(path)?);
-        Pack::new(reader)?.read()
+        Pack::new(reader)?.read_all()
     }
 
     pub fn ls_tree(&self, reference: &str, recurse: bool, path: &Path) -> Result<()> {
         trace!("finding object {}", reference);
         let sha1 = self.find_object(reference)?;
         trace!("reading object {}", sha1.encode_hex::<String>());
-        let object = match self.read_object_data(sha1)? {
-            (Tree, data) => TreeObject::new(&data)?,
+
+        let mut data = Vec::new();
+        let object = match self.read_object_data(sha1, &mut data)? {
+            Tree => TreeObject::new(&data)?,
             _ => bail!("object not a tree"),
         };
 
@@ -637,7 +683,7 @@ fn default_config() -> Ini {
     ini
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Copy, Clone)]
 enum ObjectLocation {
     ObjectFile,
     PackFile([u8; 20], u64),

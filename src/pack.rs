@@ -1,12 +1,12 @@
 extern crate sha1;
 
+use crate::util::parse_offset_delta;
 use anyhow::{Context, Result};
 use flate2::bufread::ZlibDecoder;
 use log::debug;
+use std::io;
 use std::io::{BufReader, Read};
 use std::io::{Seek, SeekFrom};
-
-use crate::util::parse_offset_delta;
 
 pub struct Pack<T: Read + Seek> {
     reader: BufReader<T>,
@@ -19,7 +19,7 @@ impl<T: Read + Seek> Pack<T> {
         Ok(pack)
     }
 
-    pub fn read(&mut self) -> Result<Vec<(BinaryObject, Vec<u8>)>> {
+    pub fn read_all(&mut self) -> Result<Vec<(BinaryObject, Vec<u8>)>> {
         self.reader
             .seek(SeekFrom::Start(0))
             .context("read from start of pack")?;
@@ -30,17 +30,19 @@ impl<T: Read + Seek> Pack<T> {
 
         for n in 0..entries {
             debug!("reading entry {}", n);
-            result.push(read_data(&mut self.reader)?);
+            let mut data = Vec::new();
+            let object_type = read_data(&mut self.reader, &mut data)?;
+            result.push((object_type, data));
         }
 
         Ok(result)
     }
 
-    pub fn read_object_data_at(&mut self, offset: u64) -> Result<(BinaryObject, Vec<u8>)> {
+    pub fn read_object_data_at(&mut self, offset: u64, data: &mut Vec<u8>) -> Result<BinaryObject> {
         self.reader
             .seek(SeekFrom::Start(offset))
             .with_context(|| format!("reading object at offset {}", offset))?;
-        read_data(&mut self.reader)
+        read_data(&mut self.reader, data)
     }
 
     fn check_header(&mut self) -> Result<usize> {
@@ -75,17 +77,18 @@ impl<T: Read + Seek> Pack<T> {
     }
 }
 
-fn read_compressed<T: Read>(reader: &mut BufReader<T>, size: usize) -> Result<Vec<u8>> {
-    debug!("reading compressed: {size}");
-    let mut bytes = vec![b'\0'; size];
+fn read_compressed<T: Read>(
+    reader: &mut BufReader<T>,
+    size: usize,
+    bytes: &mut Vec<u8>,
+) -> io::Result<()> {
+    debug!("reading compressed: {}", bytes.len());
+    bytes.resize(size, 0);
     let mut z = ZlibDecoder::new(reader);
-    z.read_exact(&mut bytes)
-        .context("reading compressed bytes")?;
-    debug!("\treading done");
-    Ok(bytes)
+    z.read_exact(bytes)
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub enum BinaryObject {
     Blob,
     Commit,
@@ -93,6 +96,15 @@ pub enum BinaryObject {
     Tree,
     OffsetDelta(u64),
     RefDelta([u8; 20]),
+}
+
+impl BinaryObject {
+    pub fn is_delta(&self) -> bool {
+        match self {
+            BinaryObject::OffsetDelta(_) | BinaryObject::RefDelta(_) => true,
+            _ => false,
+        }
+    }
 }
 
 impl BinaryObject {
@@ -109,7 +121,7 @@ impl BinaryObject {
     }
 }
 
-pub fn read_data<T: Read>(reader: &mut BufReader<T>) -> Result<(BinaryObject, Vec<u8>)> {
+pub fn read_data<T: Read>(reader: &mut BufReader<T>, data: &mut Vec<u8>) -> Result<BinaryObject> {
     debug!("reading object");
     let mut read = [0; 1];
     reader
@@ -146,15 +158,14 @@ pub fn read_data<T: Read>(reader: &mut BufReader<T>) -> Result<(BinaryObject, Ve
     };
 
     debug!("read object {}, size: {}", object_type.name(), size);
-    Ok((
-        object_type,
-        read_compressed(reader, size).with_context(|| {
-            format!(
-                "reading compressed object data for type: {}",
-                object_type.name()
-            )
-        })?,
-    ))
+
+    read_compressed(reader, size, data).with_context(|| {
+        format!(
+            "reading compressed object data for type: {}",
+            object_type.name()
+        )
+    })?;
+    Ok(object_type)
 }
 
 fn read_sha1<T: Read>(reader: &mut BufReader<T>) -> Result<[u8; 20]> {

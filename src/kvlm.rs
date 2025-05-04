@@ -1,7 +1,11 @@
 use anyhow::Context;
+use log::trace;
 use ordered_hash_map::OrderedHashMap;
+use std::str::from_utf8;
 
-pub fn kvlm_parse<'a>(raw: &'a mut [u8]) -> anyhow::Result<OrderedHashMap<&'a [u8], Vec<&'a [u8]>>> {
+pub fn kvlm_parse<'a>(
+    raw: &'a mut [u8],
+) -> anyhow::Result<OrderedHashMap<&'a [u8], Vec<&'a [u8]>>> {
     let map: OrderedHashMap<&'a _, Vec<&'a _>> = OrderedHashMap::new();
     let map = kvlm_parse_rec(raw, map).context("parsing kvlm")?;
     Ok(map)
@@ -89,10 +93,9 @@ pub fn kvlm_serialize(map: &OrderedHashMap<&[u8], Vec<&[u8]>>) -> Vec<u8> {
                 let start = k.iter();
                 let end = v.iter().flat_map(|&v| {
                     v.split(|&b| b == b'\n')
-                        .flat_map(|v| b" ".iter().chain(v.iter().chain(b"\n")))
+                        .flat_map(|v| b" ".iter().chain(v.iter()).chain(b"\n"))
                 });
-                let ret = start.chain(end).copied();
-                Some(ret)
+                Some(start.chain(end).copied())
             }
         })
         .flatten()
@@ -107,6 +110,13 @@ pub fn kvlm_serialize(map: &OrderedHashMap<&[u8], Vec<&[u8]>>) -> Vec<u8> {
         }
     }
 
+    trace!(
+        "serialized tree [[{}]]",
+        from_utf8(&v).map(String::from).unwrap_or_else(|e| {
+            let valid = from_utf8(&v[..e.valid_up_to()]).unwrap().to_string();
+            valid + "<<...bad-utf8>>"
+        })
+    );
     v
 }
 
@@ -195,7 +205,10 @@ Q52UWybBzpaP9HEd4XnR+HuQ4k2K0ns2KgNImsNvIyFwbpMUyUWLMPimaV1DWUXo
             "comment",
         );
         debug!("{}", from_utf8(&ser).unwrap());
-        assert_eq!(readable_map(&map), readable_map(&kvlm_parse(&mut ser).unwrap()));
+        assert_eq!(
+            readable_map(&map),
+            readable_map(&kvlm_parse(&mut ser).unwrap())
+        );
     }
 
     fn readable_map(map: &OrderedHashMap<&[u8], Vec<&[u8]>>) -> HashMap<String, Vec<String>> {
