@@ -3,20 +3,48 @@ use crate::pack::BinaryObject;
 use crate::repository::Repository;
 use anyhow::{Context, Result, ensure};
 use hex::ToHex;
-use log::{debug, trace};
+use log::error;
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::cmp::Ordering;
+use std::cmp::Ordering::Equal;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::rc::Rc;
-use std::str::from_utf8;
+
+struct HeapItem(u32, [u8; 20]);
+
+impl Eq for HeapItem {}
+
+impl PartialEq<Self> for HeapItem {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Equal
+    }
+}
+
+impl PartialOrd<Self> for HeapItem {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for HeapItem {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.cmp(&other.0)
+    }
+}
 
 pub struct LogIterator<'a> {
     repository: &'a Repository,
-    current: [u8; 20],
+    current: BinaryHeap<HeapItem>,
     seen: HashSet<[u8; 20]>,
+    cache: HashMap<[u8; 20], Rc<RefCell<CommitObject>>>,
 }
 
-impl<'a> LogIterator<'a> {
-    fn read_commit(&self, sha1: [u8; 20]) -> Result<Rc<RefCell<Vec<u8>>>> {
+impl LogIterator<'_> {
+    fn read_commit(&mut self, sha1: [u8; 20]) -> Result<Rc<RefCell<CommitObject>>> {
+        if let Some(cached) = self.cache.get(&sha1) {
+            return Ok(cached.clone());
+        }
+
         let mut data = Vec::new();
         let object_type = self
             .repository
@@ -27,17 +55,25 @@ impl<'a> LogIterator<'a> {
             "expected commit, received {}",
             object_type.name()
         );
-        Ok(Rc::new(RefCell::new(data)))
+        let rc = Rc::new(RefCell::new(CommitObject::from(data)?));
+        self.cache.insert(sha1, rc.clone());
+        Ok(rc)
     }
 }
 
 impl<'a> LogIterator<'a> {
-    pub fn new(repository: &'a Repository, sha1: [u8; 20]) -> Self {
-        Self {
+    pub fn new(repository: &'a Repository, sha1: [u8; 20]) -> Result<Self> {
+        let mut res = Self {
             repository,
-            current: sha1,
+            current: BinaryHeap::new(),
             seen: HashSet::new(),
-        }
+            cache: HashMap::new(),
+        };
+
+        let commit = res.read_commit(sha1)?;
+        res.current
+            .push(HeapItem(commit.borrow().committer_timestamp(), sha1));
+        Ok(res)
     }
 }
 
@@ -45,30 +81,24 @@ impl Iterator for LogIterator<'_> {
     type Item = Result<String>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if !self.seen.insert(self.current) {
-            return None;
+        let mut current;
+        loop {
+            HeapItem(_, current) = self.current.pop()?;
+            if self.seen.insert(current) {
+                break;
+            }
         }
 
-        let next;
         let res = {
-            let result = match self.read_commit(self.current) {
+            let result = match self.read_commit(current) {
                 Ok(data) => data,
                 Err(e) => return Some(Err(e)),
             };
-            let rc = result.clone();
-            let mut ref_mut = rc.borrow_mut();
-            trace!(
-                "reading object data '{}'",
-                from_utf8(ref_mut.as_slice()).unwrap_or("<<bad utf8>>")
-            );
-            let commit = match CommitObject::from(ref_mut.as_mut_slice()) {
-                Ok(commit) => commit,
-                Err(e) => return Some(Err(e)),
-            };
+            let commit = result.borrow();
 
             let line = format!(
                 "{} {}: {}",
-                self.current.encode_hex::<String>(),
+                current.encode_hex::<String>(),
                 commit
                     .author()
                     .first()
@@ -77,18 +107,25 @@ impl Iterator for LogIterator<'_> {
             )
             .replace("\n", " ");
 
-            if let Some(&next_sha1) = commit.parents().first() {
-                trace!("ascending {}", next_sha1.encode_hex::<String>());
-                next = next_sha1;
-            } else {
-                debug!("no parents, breaking");
-                return None;
+            if commit.parents().len() > 1 {
+                error!(
+                    "commit with many parents! {} {}",
+                    current.encode_hex::<String>(),
+                    commit.parents().len()
+                );
+            }
+
+            for next_sha1 in commit.parents() {
+                if let Ok(next_commit) = self.read_commit(next_sha1) {
+                    self.current.push(HeapItem(
+                        next_commit.borrow().committer_timestamp(),
+                        next_sha1,
+                    ));
+                }
             }
 
             line
         };
-
-        self.current = next;
         Some(Ok(res))
     }
 }

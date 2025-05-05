@@ -1,10 +1,10 @@
 extern crate sha1;
 
 use crate::cli::CommandObjectType;
+use crate::gitobject::GitObject;
 use crate::gitobject::blob::BlobObject;
 use crate::gitobject::delta::DeltaObject;
 use crate::gitobject::tree::TreeObject;
-use crate::gitobject::GitObject;
 use crate::hashingreader::HashingReader;
 use crate::logiterator::LogIterator;
 use crate::pack::BinaryObject::{Blob, Commit, Tag, Tree};
@@ -12,27 +12,26 @@ use crate::pack::{BinaryObject, Pack};
 use crate::packindex::PackIndex;
 use crate::repository::ObjectLocation::{ObjectFile, PackFile};
 use crate::util::validate_sha1;
-use anyhow::{bail, ensure, Context, Result};
+use BinaryObject::{OffsetDelta, RefDelta};
+use anyhow::{Context, Result, bail, ensure};
 use bytes::{Buf, Bytes};
 use configparser::ini::Ini;
-use flate2::bufread::{ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
-use hex::{decode, ToHex};
+use flate2::bufread::{ZlibDecoder, ZlibEncoder};
+use hex::{ToHex, decode};
 use log::{debug, trace};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::sink;
-use std::io::Seek;
 use std::rc::Rc;
 use std::{
-    fs::{create_dir_all, File},
+    fs::{File, create_dir_all},
     io,
     io::{BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     str::from_utf8,
 };
 use tempfile::NamedTempFile;
-use BinaryObject::{OffsetDelta, RefDelta};
 
 type PackRef = Rc<RefCell<Pack<File>>>;
 
@@ -481,11 +480,18 @@ impl Repository {
                     (reference_type, reference_data)
                 } else {
                     match location {
-                        ObjectFile => self.unpack_delta(packfile, 0, reference_type, &reference_data)?,
+                        ObjectFile => {
+                            self.unpack_delta(packfile, 0, reference_type, &reference_data)?
+                        }
                         PackFile(packfile_id, offset) => {
                             let reference_packfile = self.open_pack(packfile_id)?;
                             let reference_packfile = &mut reference_packfile.borrow_mut();
-                            self.unpack_delta(reference_packfile, offset, reference_type, &reference_data)?
+                            self.unpack_delta(
+                                reference_packfile,
+                                offset,
+                                reference_type,
+                                &reference_data,
+                            )?
                         }
                     }
                 }
@@ -553,7 +559,7 @@ impl Repository {
                     .chain(&serialized)
                     .copied(),
             )
-                .reader();
+            .reader();
             HashingReader::new(bytes)
         };
 
@@ -601,7 +607,7 @@ impl Repository {
         };
 
         let obj = match object_type {
-            CommandObjectType::Blob => GitObject::Blob(BlobObject::from(&data)),
+            CommandObjectType::Blob => GitObject::Blob(BlobObject::from(data)),
             _ => todo!(),
         };
 
@@ -653,9 +659,9 @@ impl Repository {
                     recurse,
                     &path.join(&item.path),
                 )
-                    .with_context(|| {
-                        format!("Failed to descend tree in {}", item.path.to_string_lossy())
-                    })?;
+                .with_context(|| {
+                    format!("Failed to descend tree in {}", item.path.to_string_lossy())
+                })?;
             } else {
                 trace!(
                     "{} {} {} {}",
@@ -670,7 +676,7 @@ impl Repository {
         Ok(())
     }
 
-    pub fn log_iter(&self, sha1: [u8; 20]) -> LogIterator {
+    pub fn log_iter(&self, sha1: [u8; 20]) -> Result<LogIterator> {
         LogIterator::new(self, sha1)
     }
 }

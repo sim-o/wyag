@@ -15,16 +15,16 @@ pub mod tag;
 pub mod tree;
 
 #[derive(Debug)]
-pub enum GitObject<'a> {
-    Blob(BlobObject<'a>),
-    Commit(CommitObject<'a>),
+pub enum GitObject {
+    Blob(BlobObject),
+    Commit(CommitObject),
     Tree(TreeObject),
-    Tag(TagObject<'a>),
+    Tag(TagObject),
     OffsetDelta(OffsetDeltaObject),
     RefDelta(RefDeltaObject),
 }
 
-impl<'a> Display for GitObject<'a> {
+impl Display for GitObject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
             GitObject::Blob(blob) => f.write_fmt(format_args!(
@@ -41,20 +41,20 @@ impl<'a> Display for GitObject<'a> {
     }
 }
 
-impl<'a> GitObject<'a> {
-    pub fn new(object_type: BinaryObject, data: &'a mut [u8]) -> Result<Self> {
+impl GitObject {
+    pub fn new(object_type: BinaryObject, data: Vec<u8>) -> Result<Self> {
         let object = match object_type {
             BinaryObject::Commit => {
                 GitObject::Commit(CommitObject::from(data).context("parsing commit")?)
             }
-            BinaryObject::Tree => GitObject::Tree(TreeObject::new(data).context("parsing tree")?),
+            BinaryObject::Tree => GitObject::Tree(TreeObject::new(&data).context("parsing tree")?),
             BinaryObject::Blob => GitObject::Blob(BlobObject::from(data)),
             BinaryObject::Tag => GitObject::Tag(TagObject::from(data).context("parsing tag")?),
             BinaryObject::OffsetDelta(offset) => GitObject::OffsetDelta(
-                OffsetDeltaObject::new(offset, data).context("parsing offset delta")?,
+                OffsetDeltaObject::new(offset, &data).context("parsing offset delta")?,
             ),
             BinaryObject::RefDelta(sha1) => {
-                GitObject::RefDelta(RefDeltaObject::new(sha1, data).context("parsing ref delta")?)
+                GitObject::RefDelta(RefDeltaObject::new(sha1, &data).context("parsing ref delta")?)
             }
         };
 

@@ -2,22 +2,22 @@ use std::fmt::Display;
 use std::str::from_utf8;
 
 #[derive(Debug)]
-pub struct BlobObject<'a> {
-    pub data: &'a [u8],
+pub struct BlobObject {
+    pub data: Vec<u8>,
 }
 
-impl<'a> BlobObject<'a> {
-    pub fn from(data: &'a [u8]) -> Self {
+impl BlobObject {
+    pub fn from(data: Vec<u8>) -> Self {
         Self { data }
     }
 
-    pub fn serialize(&self) -> &'a [u8] {
-        self.data
+    pub fn serialize(&self) -> &[u8] {
+        self.data.as_slice()
     }
 }
 
-impl<'a> Display for BlobObject<'a> {
+impl Display for BlobObject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(from_utf8(self.data).unwrap_or("<<BINARY>>"))
+        f.write_str(from_utf8(&self.data).unwrap_or("<<BINARY>>"))
     }
 }

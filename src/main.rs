@@ -60,8 +60,8 @@ fn ls_pack(path: &Path, packfile: String) -> anyhow::Result<()> {
     let objects = repository
         .read_packfile(&packfile)
         .with_context(|| format!("reading packfile {}", packfile))?;
-    for (object_type, mut data) in objects.into_iter() {
-        println!("object: {}", GitObject::new(object_type, &mut data)?);
+    for (object_type, data) in objects.into_iter() {
+        println!("object: {}", GitObject::new(object_type, data)?);
     }
     Ok(())
 }
@@ -106,7 +106,7 @@ fn log(repository: PathBuf, name: String) -> anyhow::Result<()> {
     let sha1 = repo
         .find_object(&name)
         .with_context(|| format!("finding object {}", name))?;
-    for msg in repo.log_iter(sha1) {
+    for msg in repo.log_iter(sha1)? {
         println!("{}", msg.context("reading logs")?);
     }
     Ok(())
