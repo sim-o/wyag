@@ -1,5 +1,6 @@
 use crate::hashingreader::HashingReader;
-use anyhow::{Context, bail, ensure};
+use crate::pack::Pack;
+use anyhow::{bail, ensure, Context};
 use hex::ToHex;
 use log::{debug, info, trace};
 use std::cmp::Ordering;
@@ -34,7 +35,7 @@ impl PackIndex {
             &mut reader,
             offsets.iter().filter(|&n| n & 0x8000_0000 != 0).count(),
         )
-        .context("reading 64 bit offsets table")?;
+            .context("reading 64 bit offsets table")?;
         let pack_sha1 = read_hash(&mut reader).context("reading pack sha1")?;
         let actual_index_sha1 = reader.finalize();
         let index_sha1 = read_hash(&mut reader).context("reading index sha1")?;
@@ -79,7 +80,7 @@ impl PackIndex {
         let mut left = if sha1[0] == 0 {
             0
         } else {
-            self.fanout[sha1[0] as usize - 1] as usize
+            self.fanout[sha1[0] as usize - 1] as usize + 1
         };
         let mut right = self.fanout[sha1[0] as usize] as usize;
         while left <= right {
@@ -91,6 +92,13 @@ impl PackIndex {
             }
         }
         None
+    }
+
+    pub fn iter(&self) -> PackIndexIterator {
+        PackIndexIterator {
+            index: self,
+            item: 0,
+        }
     }
 }
 
@@ -157,3 +165,29 @@ fn read_n_u64be<T: Read>(reader: &mut HashingReader<T>, n: usize) -> io::Result<
         })
         .collect::<Vec<u64>>())
 }
+
+pub struct PackIndexIterator<'a> {
+    index: &'a PackIndex,
+    item: usize,
+}
+
+impl Iterator for PackIndexIterator<'_> {
+    type Item = PackIndexItem;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.item >= self.index.hashes.len() {
+            return None;
+        }
+
+        let offset = if self.index.offsets[self.item] & (1u32 << 31) == 0 {
+            self.index.offsets[self.item] as u64
+        } else {
+            self.index.offsets64[(self.index.offsets[self.item] ^ (1u32 << 31)) as usize]
+        };
+        let hash = self.index.hashes[self.item];
+        self.item += 1;
+        Some(PackIndexItem(hash, offset))
+    }
+}
+
+pub struct PackIndexItem(pub [u8; 20], pub u64);

@@ -4,25 +4,29 @@ use crate::util::parse_offset_delta;
 use anyhow::{Context, Result};
 use flate2::bufread::ZlibDecoder;
 use log::debug;
+use std::cell::RefCell;
 use std::io;
 use std::io::{BufReader, Read};
 use std::io::{Seek, SeekFrom};
 
 pub struct Pack<T: Read + Seek> {
-    reader: BufReader<T>,
+    reader: RefCell<BufReader<T>>,
 }
 
 impl<T: Read + Seek> Pack<T> {
     pub fn new(reader: BufReader<T>) -> Result<Pack<T>> {
-        let mut pack = Pack { reader };
+        let pack = Pack { reader: RefCell::new(reader) };
         pack.check_header().context("check header")?;
         Ok(pack)
     }
 
-    pub fn read_all(&mut self) -> Result<Vec<(BinaryObject, Vec<u8>)>> {
-        self.reader
-            .seek(SeekFrom::Start(0))
-            .context("read from start of pack")?;
+    pub fn read_all(&self) -> Result<Vec<(BinaryObject, Vec<u8>)>> {
+        {
+            self.reader
+                .borrow_mut()
+                .seek(SeekFrom::Start(0))
+                .context("read from start of pack")?;
+        }
         let entries = self.check_header().context("check header")?;
         debug!("packfile has {} entries", entries);
 
@@ -31,24 +35,26 @@ impl<T: Read + Seek> Pack<T> {
         for n in 0..entries {
             debug!("reading entry {}", n);
             let mut data = Vec::new();
-            let object_type = read_data(&mut self.reader, &mut data)?;
+            let object_type = read_data(&mut self.reader.borrow_mut(), &mut data)?;
             result.push((object_type, data));
         }
 
         Ok(result)
     }
 
-    pub fn read_object_data_at(&mut self, offset: u64, data: &mut Vec<u8>) -> Result<BinaryObject> {
-        self.reader
+    pub fn read_object_data_at(&self, offset: u64, data: &mut Vec<u8>) -> Result<BinaryObject> {
+        let mut reader = self.reader.borrow_mut();
+        reader
             .seek(SeekFrom::Start(offset))
             .with_context(|| format!("reading object at offset {}", offset))?;
-        read_data(&mut self.reader, data)
+        read_data(&mut reader, data)
     }
 
-    fn check_header(&mut self) -> Result<usize> {
+    fn check_header(&self) -> Result<usize> {
+        let mut reader = self.reader.borrow_mut();
         {
             let mut header = [0; 4];
-            self.reader
+            reader
                 .read_exact(&mut header)
                 .context("reading magic string")?;
             anyhow::ensure!(&header == b"PACK", "packfile corrupted, bad header");
@@ -56,7 +62,7 @@ impl<T: Read + Seek> Pack<T> {
 
         {
             let mut version = [0; 4];
-            self.reader
+            reader
                 .read_exact(&mut version)
                 .context("reading version")?;
             anyhow::ensure!(
@@ -68,7 +74,7 @@ impl<T: Read + Seek> Pack<T> {
 
         let entries = {
             let mut entries = [0; 4];
-            self.reader
+            reader
                 .read_exact(&mut entries)
                 .context("reading entries count")?;
             u32::from_be_bytes(entries) as usize
@@ -100,10 +106,7 @@ pub enum BinaryObject {
 
 impl BinaryObject {
     pub fn is_delta(&self) -> bool {
-        match self {
-            BinaryObject::OffsetDelta(_) | BinaryObject::RefDelta(_) => true,
-            _ => false,
-        }
+        matches!(self, BinaryObject::OffsetDelta(_) | BinaryObject::RefDelta(_))
     }
 }
 
@@ -117,7 +120,7 @@ impl BinaryObject {
             BinaryObject::OffsetDelta(_) => "offsetdelta",
             BinaryObject::RefDelta(_) => "refdelta",
         }
-        .to_string()
+            .to_string()
     }
 }
 

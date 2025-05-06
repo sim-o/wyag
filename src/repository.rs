@@ -1,39 +1,40 @@
 extern crate sha1;
 
 use crate::cli::CommandObjectType;
-use crate::gitobject::GitObject;
 use crate::gitobject::blob::BlobObject;
 use crate::gitobject::delta::DeltaObject;
 use crate::gitobject::tree::TreeObject;
+use crate::gitobject::GitObject;
 use crate::hashingreader::HashingReader;
 use crate::logiterator::LogIterator;
 use crate::pack::BinaryObject::{Blob, Commit, Tag, Tree};
 use crate::pack::{BinaryObject, Pack};
-use crate::packindex::PackIndex;
+use crate::packindex::{PackIndex, PackIndexItem};
 use crate::repository::ObjectLocation::{ObjectFile, PackFile};
 use crate::util::validate_sha1;
-use BinaryObject::{OffsetDelta, RefDelta};
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{bail, ensure, Context, Result};
 use bytes::{Buf, Bytes};
 use configparser::ini::Ini;
-use flate2::Compression;
 use flate2::bufread::{ZlibDecoder, ZlibEncoder};
-use hex::{ToHex, decode};
+use flate2::Compression;
+use hex::{decode, ToHex};
 use log::{debug, trace};
 use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::sink;
 use std::rc::Rc;
 use std::{
-    fs::{File, create_dir_all},
+    fs::{create_dir_all, File},
     io,
     io::{BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     str::from_utf8,
 };
 use tempfile::NamedTempFile;
+use BinaryObject::{OffsetDelta, RefDelta};
 
-type PackRef = Rc<RefCell<Pack<File>>>;
+type PackRef = Rc<Pack<File>>;
 
 pub struct Repository {
     pub worktree: PathBuf,
@@ -41,6 +42,29 @@ pub struct Repository {
     conf: Option<Ini>,
     index_cache: RefCell<HashMap<PathBuf, Rc<PackIndex>>>,
     pack_cache: RefCell<HashMap<[u8; 20], PackRef>>,
+    global_index: RefCell<Option<GlobalIndex>>,
+}
+
+struct GlobalIndex {
+    fanout: [u32; 256],
+    hashes: Vec<[u8; 20]>,
+    locations: Vec<ObjectLocation>,
+}
+
+impl GlobalIndex {
+    pub fn search(&self, sha1: [u8; 20]) -> Option<ObjectLocation> {
+        let mut left = if sha1[0] == 0 { 0 } else { self.fanout[sha1[0] as usize - 1] } as usize;
+        let mut right = self.fanout[sha1[0] as usize] as usize;
+        while left <= right {
+            let i = (right - left) / 2 + left;
+            match self.hashes[i].as_slice().cmp(&sha1) {
+                Ordering::Less => left = i + 1,
+                Ordering::Greater => right = i - 1,
+                Ordering::Equal => return Some(self.locations[i]),
+            }
+        }
+        None
+    }
 }
 
 impl Repository {
@@ -89,6 +113,7 @@ impl Repository {
             conf,
             index_cache: RefCell::new(HashMap::new()),
             pack_cache: RefCell::new(HashMap::new()),
+            global_index: RefCell::new(None),
         })
     }
 
@@ -275,17 +300,10 @@ impl Repository {
         self.repo_file(&path, false)
     }
 
-    fn find_object_location(&self, sha1: [u8; 20]) -> Option<ObjectLocation> {
-        if let Some(path) = self.object_file_path(sha1) {
-            if path.is_file() {
-                return Some(ObjectFile);
-            }
-        }
-
-        let found = self
-            .repo_path(&Path::new("objects").join("pack"))
-            .read_dir()
-            .ok()?
+    fn init_global_index(&self) -> Result<()> {
+        let index_iter = self
+            .repo_path(Path::new("objects/pack"))
+            .read_dir()?
             .filter_map(|p| {
                 if let Ok(p) = p {
                     if let Some(name) = p.file_name().to_str() {
@@ -299,20 +317,57 @@ impl Repository {
                     }
                 }
                 None
-            })
-            .flat_map(|pf| {
-                let result = pf.find(sha1);
-                if let Some(offset) = result {
-                    debug!("found pack offset {}", offset);
-                    Some((pf.id(), offset))
-                } else {
-                    None
-                }
-            })
-            .next();
+            });
 
-        if let Some((pack, offset)) = found {
-            return Some(PackFile(pack, offset));
+        let mut all_items = Vec::new();
+        for index in index_iter {
+            index.iter()
+                .map(|PackIndexItem(hash, offset)| (hash, index.id(), offset))
+                .for_each(|item| all_items.push(item));
+        }
+        all_items.sort_by(|(hash1, _, _), (hash2, _, _)| hash1.cmp(hash2));
+
+        let mut result = GlobalIndex {
+            fanout: [0u32; 256],
+            hashes: Vec::with_capacity(all_items.len()),
+            locations: Vec::with_capacity(all_items.len()),
+        };
+        let mut hash_prefix = 0u8;
+        for (i, (hash, pack, offset)) in all_items.into_iter().enumerate() {
+            while hash_prefix < hash[0] {
+                result.fanout[hash_prefix as usize] = (i - 1) as u32;
+                hash_prefix += 1;
+            }
+            result.hashes.push(hash);
+            result.locations.push(PackFile(pack, offset));
+        }
+
+        self.global_index.replace(Some(result));
+
+        Ok(())
+    }
+
+    fn find_object_location(&self, sha1: [u8; 20]) -> Option<ObjectLocation> {
+        {
+            let global_index = self.global_index.borrow();
+            if global_index.is_none() {
+                drop(global_index);
+                self.init_global_index().ok()?;
+            }
+        }
+        {
+            let global = self.global_index.borrow();
+            let global = global.iter().next()?;
+            let location = global.search(sha1);
+            if location.is_some() {
+                return location;
+            }
+        }
+
+        if let Some(path) = self.object_file_path(sha1) {
+            if path.is_file() {
+                return Some(ObjectFile);
+            }
         }
 
         None
@@ -342,7 +397,7 @@ impl Repository {
             .context("reading object from location")
     }
 
-    fn open_pack(&self, id: [u8; 20]) -> Result<Rc<RefCell<Pack<File>>>> {
+    fn open_pack(&self, id: [u8; 20]) -> Result<Rc<Pack<File>>> {
         let value = {
             let cache = self.pack_cache.borrow();
             cache.get(&id).cloned()
@@ -358,7 +413,7 @@ impl Repository {
                     }
                     None => bail!("Failed to load packfile"),
                 };
-                let pack = Rc::new(RefCell::new(pack));
+                let pack = Rc::new(pack);
                 self.pack_cache.borrow_mut().insert(id, pack.clone());
                 pack
             }
@@ -384,7 +439,7 @@ impl Repository {
                 let rc = self
                     .open_pack(pack)
                     .with_context(|| format!("opening pack {}", pack.encode_hex::<String>()))?;
-                let mut packfile = rc.borrow_mut();
+                let mut packfile = rc;
                 let object_type =
                     packfile
                         .read_object_data_at(offset, data)
@@ -416,7 +471,7 @@ impl Repository {
                 }
 
                 let (object_type, unpacked_data) = self
-                    .unpack_delta(&mut packfile, offset, object_type, data)
+                    .unpack_delta(&packfile, offset, object_type, data)
                     .with_context(|| {
                         format!(
                             "unpacking delta of object {} from packfile {} at {}",
@@ -442,7 +497,7 @@ impl Repository {
 
     fn unpack_delta(
         &self,
-        packfile: &mut Pack<File>,
+        packfile: &Pack<File>,
         offset: u64,
         object_type: BinaryObject,
         data: &[u8],
@@ -485,9 +540,8 @@ impl Repository {
                         }
                         PackFile(packfile_id, offset) => {
                             let reference_packfile = self.open_pack(packfile_id)?;
-                            let reference_packfile = &mut reference_packfile.borrow_mut();
                             self.unpack_delta(
-                                reference_packfile,
+                                &reference_packfile,
                                 offset,
                                 reference_type,
                                 &reference_data,
@@ -559,7 +613,7 @@ impl Repository {
                     .chain(&serialized)
                     .copied(),
             )
-            .reader();
+                .reader();
             HashingReader::new(bytes)
         };
 
@@ -659,9 +713,9 @@ impl Repository {
                     recurse,
                     &path.join(&item.path),
                 )
-                .with_context(|| {
-                    format!("Failed to descend tree in {}", item.path.to_string_lossy())
-                })?;
+                    .with_context(|| {
+                        format!("Failed to descend tree in {}", item.path.to_string_lossy())
+                    })?;
             } else {
                 trace!(
                     "{} {} {} {}",
