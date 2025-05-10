@@ -5,6 +5,11 @@ use std::fmt::Debug;
 use std::path::PathBuf;
 use std::str::from_utf8;
 
+#[derive(Debug)]
+pub struct TreeObject {
+    leaves: Vec<TreeLeaf>,
+}
+
 impl TreeObject {
     pub fn new(data: &[u8]) -> anyhow::Result<TreeObject> {
         debug!("reading tree len: {}", data.len());
@@ -20,7 +25,7 @@ impl TreeObject {
         Ok(Self { leaves })
     }
 
-    pub fn leaf_iter(&self) -> impl Iterator<Item = &TreeLeaf> {
+    pub fn leaf_iter(&self) -> impl Iterator<Item=&TreeLeaf> {
         self.leaves.iter()
     }
 
@@ -106,11 +111,6 @@ impl TreeLeaf {
         res.extend_from_slice(&self.sha1);
         res
     }
-}
-
-#[derive(Debug)]
-pub struct TreeObject {
-    leaves: Vec<TreeLeaf>,
 }
 
 #[cfg(test)]
