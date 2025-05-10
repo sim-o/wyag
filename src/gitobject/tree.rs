@@ -25,7 +25,7 @@ impl TreeObject {
         Ok(Self { leaves })
     }
 
-    pub fn leaf_iter(&self) -> impl Iterator<Item=&TreeLeaf> {
+    pub fn leaf_iter(&self) -> impl Iterator<Item = &TreeLeaf> {
         self.leaves.iter()
     }
 

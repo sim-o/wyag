@@ -1,10 +1,10 @@
 extern crate sha1;
 
 use crate::cli::CommandObjectType;
+use crate::gitobject::GitObject;
 use crate::gitobject::blob::BlobObject;
 use crate::gitobject::delta::DeltaObject;
 use crate::gitobject::tree::TreeObject;
-use crate::gitobject::GitObject;
 use crate::hashingreader::HashingReader;
 use crate::logiterator::LogIterator;
 use crate::pack::BinaryObject::{Blob, Commit, Tag, Tree};
@@ -12,12 +12,13 @@ use crate::pack::{BinaryObject, Pack};
 use crate::packindex::{PackIndex, PackIndexItem};
 use crate::repository::ObjectLocation::{ObjectFile, PackFile};
 use crate::util::validate_sha1;
-use anyhow::{bail, ensure, Context, Result};
+use BinaryObject::{OffsetDelta, RefDelta};
+use anyhow::{Context, Result, bail, ensure};
 use bytes::{Buf, Bytes};
 use configparser::ini::Ini;
-use flate2::bufread::{ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
-use hex::{decode, ToHex};
+use flate2::bufread::{ZlibDecoder, ZlibEncoder};
+use hex::{ToHex, decode};
 use log::{debug, trace};
 use std::cell::RefCell;
 use std::cmp::Ordering;
@@ -25,14 +26,13 @@ use std::collections::HashMap;
 use std::io::sink;
 use std::rc::Rc;
 use std::{
-    fs::{create_dir_all, File},
+    fs::{File, create_dir_all},
     io,
     io::{BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     str::from_utf8,
 };
 use tempfile::NamedTempFile;
-use BinaryObject::{OffsetDelta, RefDelta};
 
 type PackRef = Rc<Pack<File>>;
 
@@ -52,7 +52,11 @@ struct GlobalIndex {
 
 impl GlobalIndex {
     pub fn search(&self, sha1: [u8; 20]) -> Option<ObjectLocation> {
-        let mut left = if sha1[0] == 0 { 0 } else { self.fanout[sha1[0] as usize - 1] } as usize;
+        let mut left = if sha1[0] == 0 {
+            0
+        } else {
+            self.fanout[sha1[0] as usize - 1]
+        } as usize;
         let mut right = self.fanout[sha1[0] as usize] as usize;
         while left <= right {
             let i = (right - left) / 2 + left;
@@ -319,7 +323,8 @@ impl Repository {
 
         let mut all_items = Vec::new();
         for index in index_iter {
-            index.iter()
+            index
+                .iter()
                 .map(|PackIndexItem(hash, offset)| (hash, index.id(), offset))
                 .for_each(|item| all_items.push(item));
         }
@@ -603,7 +608,7 @@ impl Repository {
                     .chain(&serialized)
                     .copied(),
             )
-                .reader();
+            .reader();
             HashingReader::new(bytes)
         };
 
@@ -703,9 +708,9 @@ impl Repository {
                     recurse,
                     &path.join(&item.path),
                 )
-                    .with_context(|| {
-                        format!("Failed to descend tree in {}", item.path.to_string_lossy())
-                    })?;
+                .with_context(|| {
+                    format!("Failed to descend tree in {}", item.path.to_string_lossy())
+                })?;
             } else {
                 trace!(
                     "{} {} {} {}",
