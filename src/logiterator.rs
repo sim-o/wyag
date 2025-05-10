@@ -1,7 +1,7 @@
 use crate::gitobject::commit::CommitObject;
 use crate::pack::BinaryObject;
 use crate::repository::Repository;
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use hex::ToHex;
 use log::error;
 use std::cmp::Ordering;
@@ -103,7 +103,7 @@ impl Iterator for LogIterator<'_> {
                     .unwrap_or(&"<<no author>>".to_string()),
                 commit.message().unwrap_or("".to_string())
             )
-                .replace("\n", " ");
+            .replace("\n", " ");
 
             if commit.parents().len() > 1 {
                 error!(
@@ -115,10 +115,8 @@ impl Iterator for LogIterator<'_> {
 
             for next_sha1 in commit.parents() {
                 if let Ok(next_commit) = self.read_commit(next_sha1) {
-                    self.current.push(HeapItem(
-                        next_commit.committer_timestamp(),
-                        next_sha1,
-                    ));
+                    self.current
+                        .push(HeapItem(next_commit.committer_timestamp(), next_sha1));
                 }
             }
 

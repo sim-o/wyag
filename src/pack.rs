@@ -15,7 +15,9 @@ pub struct Pack<T: Read + Seek> {
 
 impl<T: Read + Seek> Pack<T> {
     pub fn new(reader: BufReader<T>) -> Result<Pack<T>> {
-        let pack = Pack { reader: RefCell::new(reader) };
+        let pack = Pack {
+            reader: RefCell::new(reader),
+        };
         pack.check_header().context("check header")?;
         Ok(pack)
     }
@@ -62,9 +64,7 @@ impl<T: Read + Seek> Pack<T> {
 
         {
             let mut version = [0; 4];
-            reader
-                .read_exact(&mut version)
-                .context("reading version")?;
+            reader.read_exact(&mut version).context("reading version")?;
             anyhow::ensure!(
                 u32::from_be_bytes(version) == 2,
                 "Packfile version not supported: {}",
@@ -106,7 +106,10 @@ pub enum BinaryObject {
 
 impl BinaryObject {
     pub fn is_delta(&self) -> bool {
-        matches!(self, BinaryObject::OffsetDelta(_) | BinaryObject::RefDelta(_))
+        matches!(
+            self,
+            BinaryObject::OffsetDelta(_) | BinaryObject::RefDelta(_)
+        )
     }
 }
 
@@ -120,7 +123,7 @@ impl BinaryObject {
             BinaryObject::OffsetDelta(_) => "offsetdelta",
             BinaryObject::RefDelta(_) => "refdelta",
         }
-            .to_string()
+        .to_string()
     }
 }
 

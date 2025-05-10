@@ -8,7 +8,7 @@ anyhow = "1.0.98"
 bytes = "1.10.1"
 clap = { version = "4.5.35", features = ["derive"] }
 configparser = "3.1.0"
-flate2 = "1.1.1"
+flate2 = { version = "1.1.1", features = ["zlib-rs"] }
 hex = "0.4.3"
 log = "0.4.27"
 ordered_hash_map = "0.4.0"

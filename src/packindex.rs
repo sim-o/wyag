@@ -1,5 +1,5 @@
 use crate::hashingreader::HashingReader;
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use hex::ToHex;
 use log::{debug, info, trace};
 use std::cmp::Ordering;
@@ -34,7 +34,7 @@ impl PackIndex {
             &mut reader,
             offsets.iter().filter(|&n| n & 0x8000_0000 != 0).count(),
         )
-            .context("reading 64 bit offsets table")?;
+        .context("reading 64 bit offsets table")?;
         let pack_sha1 = read_hash(&mut reader).context("reading pack sha1")?;
         let actual_index_sha1 = reader.finalize();
         let index_sha1 = read_hash(&mut reader).context("reading index sha1")?;
