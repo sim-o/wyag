@@ -1,10 +1,9 @@
 use crate::gitobject::commit::CommitObject;
 use crate::pack::BinaryObject;
 use crate::repository::Repository;
-use anyhow::{Context, Result, ensure};
+use anyhow::{ensure, Context, Result};
 use hex::ToHex;
 use log::error;
-use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::cmp::Ordering::Equal;
 use std::collections::{BinaryHeap, HashMap, HashSet};
@@ -36,11 +35,11 @@ pub struct LogIterator<'a> {
     repository: &'a Repository,
     current: BinaryHeap<HeapItem>,
     seen: HashSet<[u8; 20]>,
-    cache: HashMap<[u8; 20], Rc<RefCell<CommitObject>>>,
+    cache: HashMap<[u8; 20], Rc<CommitObject>>,
 }
 
 impl LogIterator<'_> {
-    fn read_commit(&mut self, sha1: [u8; 20]) -> Result<Rc<RefCell<CommitObject>>> {
+    fn read_commit(&mut self, sha1: [u8; 20]) -> Result<Rc<CommitObject>> {
         if let Some(cached) = self.cache.get(&sha1) {
             return Ok(cached.clone());
         }
@@ -55,7 +54,7 @@ impl LogIterator<'_> {
             "expected commit, received {}",
             object_type.name()
         );
-        let rc = Rc::new(RefCell::new(CommitObject::from(data)?));
+        let rc = Rc::new(CommitObject::from(data)?);
         self.cache.insert(sha1, rc.clone());
         Ok(rc)
     }
@@ -72,7 +71,7 @@ impl<'a> LogIterator<'a> {
 
         let commit = res.read_commit(sha1)?;
         res.current
-            .push(HeapItem(commit.borrow().committer_timestamp(), sha1));
+            .push(HeapItem(commit.committer_timestamp(), sha1));
         Ok(res)
     }
 }
@@ -90,11 +89,10 @@ impl Iterator for LogIterator<'_> {
         }
 
         let res = {
-            let result = match self.read_commit(current) {
+            let commit = match self.read_commit(current) {
                 Ok(data) => data,
                 Err(e) => return Some(Err(e)),
             };
-            let commit = result.borrow();
 
             let line = format!(
                 "{} {}: {}",
@@ -105,7 +103,7 @@ impl Iterator for LogIterator<'_> {
                     .unwrap_or(&"<<no author>>".to_string()),
                 commit.message().unwrap_or("".to_string())
             )
-            .replace("\n", " ");
+                .replace("\n", " ");
 
             if commit.parents().len() > 1 {
                 error!(
@@ -118,7 +116,7 @@ impl Iterator for LogIterator<'_> {
             for next_sha1 in commit.parents() {
                 if let Ok(next_commit) = self.read_commit(next_sha1) {
                     self.current.push(HeapItem(
-                        next_commit.borrow().committer_timestamp(),
+                        next_commit.committer_timestamp(),
                         next_sha1,
                     ));
                 }

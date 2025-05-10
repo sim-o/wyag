@@ -1,5 +1,4 @@
 use crate::hashingreader::HashingReader;
-use crate::pack::Pack;
 use anyhow::{bail, ensure, Context};
 use hex::ToHex;
 use log::{debug, info, trace};

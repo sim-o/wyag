@@ -40,7 +40,6 @@ pub struct Repository {
     pub worktree: PathBuf,
     gitdir: PathBuf,
     conf: Option<Ini>,
-    index_cache: RefCell<HashMap<PathBuf, Rc<PackIndex>>>,
     pack_cache: RefCell<HashMap<[u8; 20], PackRef>>,
     global_index: RefCell<Option<GlobalIndex>>,
 }
@@ -111,7 +110,6 @@ impl Repository {
             worktree: path.into(),
             gitdir,
             conf,
-            index_cache: RefCell::new(HashMap::new()),
             pack_cache: RefCell::new(HashMap::new()),
             global_index: RefCell::new(None),
         })
@@ -373,19 +371,11 @@ impl Repository {
         None
     }
 
-    fn open_index(&self, path: &Path) -> Result<Rc<PackIndex>> {
-        if let Some(cached) = self.index_cache.borrow().get(path) {
-            return Ok(cached.clone());
-        }
-
+    fn open_index(&self, path: &Path) -> Result<PackIndex> {
         let file = File::open(path)
             .with_context(|| format!("opening pack index file {}", path.to_string_lossy()))?;
         let index = PackIndex::new(BufReader::new(file))
             .with_context(|| format!("opening pack index file {}", path.to_string_lossy()))?;
-        let index = Rc::new(index);
-        self.index_cache
-            .borrow_mut()
-            .insert(path.to_path_buf(), index.clone());
         Ok(index)
     }
 
@@ -433,13 +423,13 @@ impl Repository {
             "data must be empty before reading {}",
             sha1.encode_hex::<String>()
         );
+
         match location {
             ObjectFile => self.read_object_file_data(sha1, data),
             PackFile(pack, offset) => {
-                let rc = self
+                let packfile = self
                     .open_pack(pack)
                     .with_context(|| format!("opening pack {}", pack.encode_hex::<String>()))?;
-                let mut packfile = rc;
                 let object_type =
                     packfile
                         .read_object_data_at(offset, data)

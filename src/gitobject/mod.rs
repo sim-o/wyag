@@ -42,7 +42,7 @@ impl Display for GitObject {
 }
 
 impl GitObject {
-    pub fn new(object_type: BinaryObject, data: Vec<u8>) -> Result<Self> {
+    pub fn new(object_type: BinaryObject, data: Vec<u8>) -> Result<Box<Self>> {
         let object = match object_type {
             BinaryObject::Commit => {
                 GitObject::Commit(CommitObject::from(data).context("parsing commit")?)
@@ -58,7 +58,7 @@ impl GitObject {
             }
         };
 
-        Ok(object)
+        Ok(Box::new(object))
     }
 
     pub fn name(&self) -> &'static [u8] {
