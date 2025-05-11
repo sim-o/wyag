@@ -7,12 +7,15 @@ use std::io;
 use std::io::{BufReader, Read};
 
 pub struct PackIndex {
+    #[allow(dead_code)]
     fanout: [u32; 256],
     hashes: Vec<[u8; 20]>,
+    #[allow(dead_code)]
     crc32: Vec<u32>,
     offsets: Vec<u32>,
     offsets64: Vec<u64>,
     pack_sha1: [u8; 20],
+    #[allow(dead_code)]
     index_sha1: [u8; 20],
 }
 
@@ -62,6 +65,7 @@ impl PackIndex {
         self.pack_sha1
     }
 
+    #[allow(dead_code)]
     pub fn find(&self, sha1: [u8; 20]) -> Option<u64> {
         let index = self.search_hash(sha1)?;
 

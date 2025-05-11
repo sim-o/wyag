@@ -39,6 +39,7 @@ type PackRef = Rc<Pack<File>>;
 pub struct Repository {
     pub worktree: PathBuf,
     gitdir: PathBuf,
+    #[allow(dead_code)]
     conf: Option<Ini>,
     pack_cache: RefCell<HashMap<[u8; 20], PackRef>>,
     global_index: RefCell<Option<GlobalIndex>>,
