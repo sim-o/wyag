@@ -16,13 +16,17 @@ pub struct DeltaObject {
 
 #[derive(Debug)]
 pub struct OffsetDeltaObject {
+    #[allow(dead_code)]
     pub offset: u64,
+    #[allow(dead_code)]
     pub delta: DeltaObject,
 }
 
 #[derive(Debug)]
 pub struct RefDeltaObject {
+    #[allow(dead_code)]
     pub reference: [u8; 20],
+    #[allow(dead_code)]
     pub delta: DeltaObject,
 }
 
